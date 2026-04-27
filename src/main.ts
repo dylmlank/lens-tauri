@@ -21,10 +21,18 @@ let theme = "void";
 let pendingImage: string | null = null;
 let responseCache: Record<string, string> = {};
 let promptTemplates: PromptTemplate[] = [
-  { name: "Review code", prompt: "Review this code for bugs and improvements:" },
-  { name: "ELI5", prompt: "Explain this like I'm 5:" },
-  { name: "Write tests", prompt: "Write tests for this:" },
-  { name: "Summarize", prompt: "Summarize this concisely:" },
+  { name: "Review code", prompt: "Review this code for bugs, security issues, and improvements:" },
+  { name: "ELI5", prompt: "Explain this like I'm 5 years old:" },
+  { name: "Write tests", prompt: "Write comprehensive tests for this:" },
+  { name: "Summarize", prompt: "Summarize this concisely in bullet points:" },
+  { name: "Debug", prompt: "Debug this error and explain the fix:" },
+  { name: "Refactor", prompt: "Refactor this code to be cleaner and more efficient:" },
+  { name: "Translate", prompt: "Translate this to Python:" },
+  { name: "Pros & Cons", prompt: "Give me the pros and cons of this:" },
+  { name: "Email", prompt: "Write a professional email about this:" },
+  { name: "Brainstorm", prompt: "Brainstorm 5 creative ideas for:" },
+  { name: "Regex", prompt: "Write a regex pattern that matches:" },
+  { name: "SQL", prompt: "Write an SQL query to:" },
 ];
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
