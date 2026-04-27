@@ -44,7 +44,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 // ── Config ──
 const CONFIG = {
-  apiKey: "", model: "minimax/minimax-m2.5:free", ollamaUrl: "",
+  apiKey: "", geminiKey: "", model: "minimax/minimax-m2.5:free", ollamaUrl: "",
   systemPrompt: "You are Lens, a witty AI assistant. Be concise. Use emoji and markdown. Never ask permission. Just do it.",
 };
 
@@ -505,7 +505,8 @@ function renderHistory(): string {
 
 function renderSettings(): string {
   return `<div class="panel"><div class="panel-header"><div class="panel-title" style="color:var(--purple)">Settings</div></div>
-    <div class="card"><div class="card-title">API Key</div><input id="set-api-key" type="password" class="panel-input" value="${CONFIG.apiKey}" style="margin-top:8px"></div>
+    <div class="card"><div class="card-title">OpenRouter API Key</div><input id="set-api-key" type="password" class="panel-input" value="${CONFIG.apiKey}" placeholder="sk-or-v1-... (optional if using Ollama)" style="margin-top:8px"></div>
+    <div class="card"><div class="card-title" style="color:var(--cyan)">Gemini API Key (for image analysis)</div><input id="set-gemini-key" type="password" class="panel-input" value="${CONFIG.geminiKey || ""}" placeholder="Get free at aistudio.google.com/apikey" style="margin-top:8px"></div>
     <div class="card"><div class="card-title">Model</div><select id="set-model" class="panel-input" style="margin-top:8px">${MODELS.map(m => `<option value="${m}" ${m === CONFIG.model ? "selected" : ""}>${m}</option>`).join("")}</select></div>
     <div class="card"><div class="card-title">Ollama URL</div><input id="set-ollama" class="panel-input" value="${CONFIG.ollamaUrl || ""}" placeholder="http://localhost:11434" style="margin-top:8px"></div>
     <div class="card"><div class="card-title">Theme</div><div style="display:flex;gap:8px;margin-top:8px">${["void","daylight","ocean"].map(t => `<button class="btn-small ${t === theme ? "active" : ""}" data-theme="${t}">${t}</button>`).join("")}</div></div>
@@ -578,6 +579,7 @@ function attachListeners() {
   document.querySelectorAll("[data-theme]").forEach(el => el.addEventListener("click", () => { theme = (el as HTMLElement).dataset.theme || "void"; localStorage.setItem("lens-theme", theme); applyTheme(); render(); }));
   document.getElementById("btn-save-settings")?.addEventListener("click", () => {
     CONFIG.apiKey = (document.getElementById("set-api-key") as HTMLInputElement)?.value || "";
+    CONFIG.geminiKey = (document.getElementById("set-gemini-key") as HTMLInputElement)?.value || "";
     CONFIG.model = (document.getElementById("set-model") as HTMLSelectElement)?.value || CONFIG.model;
     CONFIG.ollamaUrl = (document.getElementById("set-ollama") as HTMLInputElement)?.value || "";
     CONFIG.systemPrompt = (document.getElementById("set-prompt") as HTMLTextAreaElement)?.value || CONFIG.systemPrompt;
@@ -662,7 +664,7 @@ async function sendImageMessage(text: string, img: string) {
 
   let response = "";
   try {
-    response = await invoke<string>("analyze_image", { prompt: text, imageBase64: img });
+    response = await invoke<string>("analyze_image", { prompt: text, imageBase64: img, geminiKey: CONFIG.geminiKey || "" });
   } catch (e) {
     response = `Error analyzing image: ${e}`;
   }

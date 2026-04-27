@@ -169,71 +169,65 @@ async fn ollama_chat(model: String, messages_json: String) -> Result<String, Str
 }
 
 #[tauri::command]
-async fn analyze_image(prompt: String, image_base64: String) -> Result<String, String> {
+async fn analyze_image(prompt: String, image_base64: String, gemini_key: String) -> Result<String, String> {
     let result = tokio::task::spawn_blocking(move || {
-        // Save image to temp file
+        // Try Gemini Vision API first (fast, accurate, free)
+        if !gemini_key.is_empty() {
+            let body = serde_json::json!({
+                "contents": [{
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": "image/png", "data": image_base64}}
+                    ]
+                }]
+            });
+
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}",
+                gemini_key
+            );
+
+            let out = std::process::Command::new("curl")
+                .args(["-s", "-m", "30", &url,
+                       "-H", "Content-Type: application/json", "-d", &body.to_string()])
+                .output();
+
+            if let Ok(o) = out {
+                if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                    if let Some(text) = parsed["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                        if !text.is_empty() {
+                            return text.to_string();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: OCR + text model
         let tmp_img = "/tmp/lens_analyze.png";
-        let tmp_txt = "/tmp/lens_ocr.txt";
         if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&image_base64) {
             let _ = std::fs::write(tmp_img, &bytes);
         } else {
             return "Error: invalid image data".to_string();
         }
 
-        // OCR with tesseract (fast, reliable)
-        let ocr = std::process::Command::new("tesseract")
-            .args([tmp_img, "/tmp/lens_ocr", "-l", "eng"])
-            .output();
-
-        let extracted_text = if let Ok(_) = ocr {
-            std::fs::read_to_string(tmp_txt).unwrap_or_default()
-        } else {
-            String::new()
-        };
-
-        // Clean up
+        let _ = std::process::Command::new("tesseract").args([tmp_img, "/tmp/lens_ocr", "-l", "eng"]).output();
+        let text = std::fs::read_to_string("/tmp/lens_ocr.txt").unwrap_or_default();
         let _ = std::fs::remove_file(tmp_img);
-        let _ = std::fs::remove_file(tmp_txt);
+        let _ = std::fs::remove_file("/tmp/lens_ocr.txt");
 
-        if extracted_text.trim().is_empty() {
-            // No text found — describe as "an image with no readable text"
-            let body = serde_json::json!({
-                "model": "llama3.2",
-                "messages": [{"role": "user", "content": format!("{}\n\n(The user shared an image but no text was detected in it. Acknowledge you received an image and ask what they'd like to know about it.)", prompt)}],
-                "stream": false
-            });
-            let out = std::process::Command::new("curl")
-                .args(["-s", "-m", "30", "http://localhost:11434/api/chat",
-                       "-H", "Content-Type: application/json", "-d", &body.to_string()])
-                .output();
-            if let Ok(o) = out {
-                if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                    if let Some(content) = parsed["message"]["content"].as_str() {
-                        return content.to_string();
-                    }
-                }
-            }
-            return "I received your image but couldn't extract any text from it. Could you describe what's in it?".to_string();
+        if text.trim().is_empty() {
+            return "I can see your image but need a Gemini API key for full visual analysis. Get one free at aistudio.google.com/apikey and add it in Settings.".to_string();
         }
 
-        // Send OCR text to llama3.2 for analysis
-        let body = serde_json::json!({
-            "model": "llama3.2",
-            "messages": [{"role": "user", "content": format!("{}\n\nText extracted from the image:\n{}", prompt, &extracted_text[..extracted_text.len().min(2000)])}],
-            "stream": false
-        });
-        let out = std::process::Command::new("curl")
-            .args(["-s", "-m", "30", "http://localhost:11434/api/chat",
-                   "-H", "Content-Type: application/json", "-d", &body.to_string()])
-            .output();
+        let body = serde_json::json!({"model":"llama3.2","messages":[{"role":"user","content":format!("{}\n\nText from image:\n{}",prompt,&text[..text.len().min(2000)])}],"stream":false});
+        let out = std::process::Command::new("curl").args(["-s","-m","30","http://localhost:11434/api/chat","-H","Content-Type: application/json","-d",&body.to_string()]).output();
         if let Ok(o) = out {
-            if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                if let Some(content) = parsed["message"]["content"].as_str() {
-                    return content.to_string();
-                }
+            if let Ok(p) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                if let Some(c) = p["message"]["content"].as_str() { return c.to_string(); }
             }
         }
-        format!("I extracted this text from your image:\n\n{}", &extracted_text[..extracted_text.len().min(500)])
+        format!("Extracted text: {}", &text[..text.len().min(300)])
     }).await.map_err(|e| e.to_string())?;
     Ok(result)
 }
