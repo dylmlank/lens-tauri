@@ -1,6 +1,7 @@
-// Lens v2.2 — Full feature set
+// Lens v2.3 — Brain architecture
 import { invoke } from "@tauri-apps/api/core";
 import hljs from "highlight.js";
+import { tryInstantResponse, pickModel, summarizeConversation, extractMemoriesFromText, isGoodResponse } from "./brain";
 
 // ── Types ──
 interface Message { role: string; content: string; image?: string; id: string; }
@@ -61,46 +62,57 @@ function applyTheme() {
   Object.entries(t).forEach(([k, v]) => r.setProperty(`--${k}`, v));
 }
 
-// ── Local tool routing (no LLM needed) ──
-function tryLocalTool(text: string): string | null {
-  const lower = text.toLowerCase().trim();
-  if (/^what time|^what's the time|^current time/i.test(lower)) return `It's **${new Date().toLocaleTimeString()}** on ${new Date().toLocaleDateString()} 🕐`;
-  if (/^what day|^what's the date|^today's date/i.test(lower)) return `Today is **${new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}** 📅`;
-  if (/^(hi|hello|hey|sup|yo|waddup)[\s!?.]*$/i.test(lower)) return ["Hey! What's up? 🚀", "Yo! What can I do for you? 😎", "Hey there! What are we building? 🔥"][Math.floor(Math.random() * 3)];
-  if (/^(thanks|thank you|thx)[\s!?.]*$/i.test(lower)) return ["Anytime! 🤙", "You got it! ✌️", "No problem! 💪"][Math.floor(Math.random() * 3)];
-  // Calculator
-  const calcMatch = lower.match(/^(?:calculate|calc|what's|whats|what is)\s+(.+)/i);
-  if (calcMatch) {
-    try {
-      const expr = calcMatch[1].replace(/x/g, "*").replace(/÷/g, "/");
-      const result = Function(`"use strict"; return (${expr})`)();
-      if (typeof result === "number") return `**${calcMatch[1]}** = **${result}** 🔢`;
-    } catch {}
-  }
-  return null;
-}
-
 // ── API ──
-async function callLLM(onToken?: (t: string) => void): Promise<string> {
+async function callLLM(onToken?: (t: string) => void, forceModels?: string[]): Promise<string> {
   const sysPrompt = CONFIG.systemPrompt + (memories.length > 0 ? `\nUser: ${memories.slice(0, 3).join("; ")}` : "");
   const apiMsgs = [{ role: "system", content: sysPrompt }, ...messages.slice(-16).map(m => ({ role: m.role, content: m.content }))];
+  const lastMsg = messages.slice(-1)[0]?.content || "";
 
   // Check cache
-  const cacheKey = messages.slice(-1)[0]?.content?.slice(0, 100) || "";
+  const cacheKey = lastMsg.slice(0, 100);
   if (responseCache[cacheKey]) { onToken?.(responseCache[cacheKey]); return responseCache[cacheKey]; }
 
-  // Try Ollama
-  if (CONFIG.ollamaUrl) {
-    try {
-      const r = await fetch(`${CONFIG.ollamaUrl}/api/chat`, { method: "POST", body: JSON.stringify({ model: CONFIG.model, messages: apiMsgs, stream: false }), signal: AbortSignal.timeout(8000) });
-      if (r.ok) { const d = await r.json(); const t = d.message?.content || ""; if (t) { responseCache[cacheKey] = t; save("lens-cache", responseCache); onToken?.(t); return t; } }
-    } catch {}
-  }
+  // Smart model selection
+  const models = forceModels || pickModel(lastMsg, false);
 
-  // OpenRouter streaming
-  const models = [CONFIG.model, ...MODELS.filter(m => m !== CONFIG.model)];
   for (const model of models) {
     try {
+      // Local Ollama model (no prefix = local)
+      if (!model.includes("/")) {
+        const r = await fetch("http://localhost:11434/api/chat", {
+          method: "POST",
+          body: JSON.stringify({ model, messages: apiMsgs, stream: true }),
+          signal: AbortSignal.timeout(12000),
+        });
+        if (!r.ok) continue;
+        const reader = r.body?.getReader(); if (!reader) continue;
+        const dec = new TextDecoder(); let full = "";
+        while (true) {
+          const { done, value } = await reader.read(); if (done) break;
+          const text = dec.decode(value, { stream: true });
+          for (const line of text.split("\n")) {
+            if (!line.trim()) continue;
+            try {
+              const d = JSON.parse(line);
+              const tok = d.message?.content || "";
+              if (tok) { full += tok; onToken?.(tok); }
+              if (d.done) break;
+            } catch {}
+          }
+        }
+        if (full) {
+          // Quality check — if bad response, try cloud model
+          if (!isGoodResponse(lastMsg, full) && models.length > 1) continue;
+          responseCache[cacheKey] = full;
+          if (Object.keys(responseCache).length > 100) responseCache = Object.fromEntries(Object.entries(responseCache).slice(-50));
+          save("lens-cache", responseCache);
+          return full;
+        }
+        continue;
+      }
+
+      // Cloud model (OpenRouter)
+      if (!CONFIG.apiKey) continue;
       const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 15000);
       const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST", signal: ctrl.signal,
@@ -119,7 +131,12 @@ async function callLLM(onToken?: (t: string) => void): Promise<string> {
           try { const tok = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || ""; if (tok) { full += tok; onToken?.(tok); } } catch {}
         }
       }
-      if (full) { responseCache[cacheKey] = full; if (Object.keys(responseCache).length > 100) responseCache = Object.fromEntries(Object.entries(responseCache).slice(-50)); save("lens-cache", responseCache); return full; }
+      if (full) {
+        responseCache[cacheKey] = full;
+        if (Object.keys(responseCache).length > 100) responseCache = Object.fromEntries(Object.entries(responseCache).slice(-50));
+        save("lens-cache", responseCache);
+        return full;
+      }
     } catch { continue; }
   }
   return "All models busy. Try again.";
@@ -191,7 +208,7 @@ function md(text: string): string {
 // ── Conversation ──
 function saveConvo() {
   if (messages.length < 2) return;
-  const title = messages.find(m => m.role === "user")?.content.slice(0, 50) || "Untitled";
+  const title = summarizeConversation(messages);
   if (currentConvoId) { const i = conversations.findIndex(c => c.id === currentConvoId); if (i >= 0) { conversations[i].messages = [...messages]; conversations[i].title = title; } }
   else { currentConvoId = uid(); conversations.unshift({ id: currentConvoId, title, created: new Date().toISOString(), messages: [...messages] }); }
   save("lens-convos", conversations.slice(0, 50));
@@ -257,10 +274,16 @@ function updateStreamingUI(token: string) {
   if (ca) ca.scrollTop = ca.scrollHeight;
 }
 
+async function isOllamaRunning(): Promise<boolean> {
+  try { const r = await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(2000) }); return r.ok; } catch { return false; }
+}
+
 // ── Render ──
-function render() {
+async function render() {
   const app = document.getElementById("app")!;
-  if (!CONFIG.apiKey && !CONFIG.ollamaUrl) { renderSetup(app); return; }
+  // Can work with just Ollama (no API key needed)
+  if (!CONFIG.apiKey && !CONFIG.ollamaUrl && !await isOllamaRunning()) { renderSetup(app); return; }
+  if (!CONFIG.apiKey && !CONFIG.ollamaUrl && await isOllamaRunning()) { CONFIG.ollamaUrl = "http://localhost:11434"; CONFIG.model = "llama3.2"; save("lens-config", CONFIG); }
 
   const tabs = ["Chat", "Memory", "Tools", "History", "Settings"];
   app.innerHTML = `
@@ -446,9 +469,12 @@ function doSend() {
 async function sendAndRender(text: string) {
   if (isLoading) return;
 
-  // Try local tool first (instant response)
-  const local = tryLocalTool(text);
-  if (local) { messages.push({ role: "user", content: text, id: uid() }); messages.push({ role: "assistant", content: local, id: uid() }); saveConvo(); render(); return; }
+  // Brain: instant response for simple stuff (0ms)
+  const instant = tryInstantResponse(text);
+  if (instant) { messages.push({ role: "user", content: text, id: uid() }); messages.push({ role: "assistant", content: instant, id: uid() }); saveConvo(); render(); return; }
+
+  // Brain: extract memories from user message
+  for (const mem of extractMemoriesFromText(text)) addMemory(mem);
 
   messages.push({ role: "user", content: text, id: uid() }); isLoading = true; streamBuffer = ""; render();
 
