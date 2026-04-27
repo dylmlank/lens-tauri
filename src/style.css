@@ -349,3 +349,42 @@ html, body {
 .btn-small:hover { background: rgba(139,92,246,0.2); }
 .btn-delete { color: var(--text-muted); background: none; border: none; cursor: pointer; }
 .btn-delete:hover { color: #ef4444; }
+
+/* ── Settings & Panel Inputs ── */
+.panel-input {
+  width: 100%;
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.panel-input:focus { border-color: var(--purple); }
+.panel-input::placeholder { color: var(--text-muted); }
+
+select.panel-input { cursor: pointer; }
+
+textarea.panel-input { resize: vertical; min-height: 60px; }
+
+.input-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.input-row .panel-input { flex: 1; }
+
+.btn-small.active {
+  background: var(--purple) !important;
+  color: white !important;
+  border-color: var(--purple) !important;
+}
+
+/* ── Smooth transitions ── */
+.tab-content { transition: opacity 0.15s ease; }
+.message { transition: all 0.2s ease; }
+.card { transition: all 0.2s ease; }
