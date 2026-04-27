@@ -92,46 +92,30 @@ async function callLLM(onToken?: (t: string) => void, forceModels?: string[]): P
   const cacheKey = lastMsg.slice(0, 100);
   if (responseCache[cacheKey]) { onToken?.(responseCache[cacheKey]); return responseCache[cacheKey]; }
 
-  // Smart model selection
   const models = forceModels || pickModel(lastMsg, false);
 
   for (const model of models) {
     try {
-      // Local Ollama model (no prefix = local)
+      // Local Ollama — use Rust backend (reliable, no CORS/CSP issues)
       if (!model.includes("/")) {
-        const r = await fetch("http://localhost:11434/api/chat", {
-          method: "POST",
-          body: JSON.stringify({ model, messages: apiMsgs, stream: true }),
-          signal: AbortSignal.timeout(12000),
+        const result = await invoke<string>("ollama_chat", {
+          model,
+          messagesJson: JSON.stringify(apiMsgs),
         });
-        if (!r.ok) continue;
-        const reader = r.body?.getReader(); if (!reader) continue;
-        const dec = new TextDecoder(); let full = "";
-        while (true) {
-          const { done, value } = await reader.read(); if (done) break;
-          const text = dec.decode(value, { stream: true });
-          for (const line of text.split("\n")) {
-            if (!line.trim()) continue;
-            try {
-              const d = JSON.parse(line);
-              const tok = d.message?.content || "";
-              if (tok) { full += tok; onToken?.(tok); }
-              if (d.done) break;
-            } catch {}
+        if (result && !result.startsWith("Error:")) {
+          onToken?.(result);
+          if (isGoodResponse(lastMsg, result) || models.length <= 1) {
+            responseCache[cacheKey] = result;
+            if (Object.keys(responseCache).length > 100) responseCache = Object.fromEntries(Object.entries(responseCache).slice(-50));
+            save("lens-cache", responseCache);
+            return result;
           }
-        }
-        if (full) {
-          // Quality check — if bad response, try cloud model
-          if (!isGoodResponse(lastMsg, full) && models.length > 1) continue;
-          responseCache[cacheKey] = full;
-          if (Object.keys(responseCache).length > 100) responseCache = Object.fromEntries(Object.entries(responseCache).slice(-50));
-          save("lens-cache", responseCache);
-          return full;
+          continue; // Bad quality, try next model
         }
         continue;
       }
 
-      // Cloud model (OpenRouter)
+      // Cloud model (OpenRouter) — only if API key exists
       if (!CONFIG.apiKey) continue;
       const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 15000);
       const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -140,7 +124,7 @@ async function callLLM(onToken?: (t: string) => void, forceModels?: string[]): P
         body: JSON.stringify({ model, messages: apiMsgs, stream: true }),
       });
       clearTimeout(timer);
-      if (r.status === 401) return "Invalid API key. Go to Settings.";
+      if (r.status === 401) continue; // Bad key, try next
       if (!r.ok) continue;
       const reader = r.body?.getReader(); if (!reader) continue;
       const dec = new TextDecoder(); let full = "";
@@ -153,13 +137,12 @@ async function callLLM(onToken?: (t: string) => void, forceModels?: string[]): P
       }
       if (full) {
         responseCache[cacheKey] = full;
-        if (Object.keys(responseCache).length > 100) responseCache = Object.fromEntries(Object.entries(responseCache).slice(-50));
         save("lens-cache", responseCache);
         return full;
       }
     } catch { continue; }
   }
-  return "All models busy. Try again.";
+  return "Couldn't get a response. Make sure Ollama is running (ollama serve) or update your API key in Settings.";
 }
 
 // ── Tool Execution ──
@@ -295,7 +278,10 @@ function updateStreamingUI(token: string) {
 }
 
 async function isOllamaRunning(): Promise<boolean> {
-  try { const r = await fetch("http://localhost:11434/api/tags", { signal: AbortSignal.timeout(2000) }); return r.ok; } catch { return false; }
+  try {
+    const result = await invoke<string>("run_command", { command: "curl -s -m 2 http://localhost:11434/api/tags" });
+    return result.includes("models");
+  } catch { return false; }
 }
 
 // ── Render ──

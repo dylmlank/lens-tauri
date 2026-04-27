@@ -145,6 +145,27 @@ fn write_vault_note(path: String, content: String) -> String {
 }
 
 #[tauri::command]
+fn ollama_chat(model: String, messages_json: String) -> String {
+    let out = std::process::Command::new("curl")
+        .args(["-s", "-m", "30", "http://localhost:11434/api/chat",
+               "-H", "Content-Type: application/json",
+               "-d", &format!(r#"{{"model":"{}","messages":{},"stream":false}}"#, model, messages_json)])
+        .output();
+
+    match out {
+        Ok(o) => {
+            if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                if let Some(content) = parsed["message"]["content"].as_str() {
+                    return content.to_string();
+                }
+            }
+            String::from_utf8_lossy(&o.stdout).to_string()
+        }
+        Err(e) => format!("Error: {}", e),
+    }
+}
+
+#[tauri::command]
 fn analyze_image(prompt: String, image_base64: String) -> String {
     // Try vision models via Ollama — Rust handles the long timeout
     for model in &["moondream", "minicpm-v", "llama3.2-vision"] {
@@ -180,7 +201,7 @@ fn main() {
             run_command, read_file, write_file,
             read_file_base64, save_upload, take_screenshot,
             search_vault, list_vault_notes, write_vault_note,
-            analyze_image
+            analyze_image, ollama_chat
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
