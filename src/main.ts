@@ -33,6 +33,7 @@ let promptTemplates: PromptTemplate[] = [
   { name: "Brainstorm", prompt: "Brainstorm 5 creative ideas for:" },
   { name: "Regex", prompt: "Write a regex pattern that matches:" },
   { name: "SQL", prompt: "Write an SQL query to:" },
+  { name: "Humanize", prompt: "Rewrite this to sound like a real person wrote it — use casual grammar, contractions, vary sentence length, start some sentences with 'and' or 'but', throw in filler words like 'honestly' or 'basically', mix up the order of points so it doesn't feel like a list, and make it sound like you're just talking to a friend. No perfect structure. No robotic patterns:" },
 ];
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
