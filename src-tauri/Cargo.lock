@@ -1721,6 +1721,8 @@ checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
 name = "lens"
 version = "2.0.0"
 dependencies = [
+ "base64 0.22.1",
+ "dirs",
  "serde",
  "serde_json",
  "shellexpand",

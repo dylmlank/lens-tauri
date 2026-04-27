@@ -2,7 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 // ── Types ──
-interface Message { role: string; content: string; }
+interface Message { role: string; content: string; image?: string; }
 interface Conversation { id: string; title: string; created: string; messages: Message[]; pinned?: boolean; }
 
 // ── State ──
@@ -312,7 +312,8 @@ function renderChat(): string {
     const label = m.role === "user" ? "YOU" : "LENS";
     const c = m.role === "user" ? m.content : stripToolTokens(m.content);
     const body = m.role === "user" ? c.replace(/</g, "&lt;").replace(/\n/g, "<br>") : md(c);
-    return `<div class="message ${cls}"><div class="role">${label}</div><div class="body">${body}</div></div>`;
+    const img = m.image ? `<img src="data:image/png;base64,${m.image}" style="max-width:300px;max-height:200px;border-radius:10px;margin:8px 0;border:1px solid var(--border)">` : "";
+    return `<div class="message ${cls}"><div class="role">${label}</div>${img}<div class="body">${body}</div></div>`;
   }).join("");
   return `<div class="chat-area">${msgs}${isLoading ? '<div class="thinking">Working on it...</div>' : ''}</div>`;
 }
@@ -364,10 +365,17 @@ function renderSettings(): string {
   </div>`;
 }
 
+let pendingImage: string | null = null;
+
 function renderInputBar(): string {
   return `<div class="input-bar">
     <button class="btn-icon btn-voice ${voiceMode ? "active" : ""}" id="btn-voice">${voiceMode ? "Voice ON" : "Voice"}</button>
-    <textarea id="chat-input" placeholder="Message Lens..." ${isLoading ? "disabled" : ""}></textarea>
+    <button class="btn-icon btn-upload" id="btn-upload" title="Upload file">Upload</button>
+    <input type="file" id="file-input" style="display:none" accept="image/*,.txt,.py,.js,.ts,.json,.md,.csv,.html,.css">
+    <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+      ${pendingImage ? `<div style="position:relative;display:inline-block"><img src="data:image/png;base64,${pendingImage}" style="max-height:60px;border-radius:8px;border:1px solid var(--border)"><button id="btn-remove-img" style="position:absolute;top:-6px;right:-6px;background:var(--pink);color:white;border:none;border-radius:50%;width:18px;height:18px;font-size:11px;cursor:pointer;line-height:16px">×</button></div>` : ""}
+      <textarea id="chat-input" placeholder="${pendingImage ? "Describe what you want to know about this image..." : "Message Lens... (paste images with Ctrl+V)"}" ${isLoading ? "disabled" : ""}></textarea>
+    </div>
     <button class="btn-send" id="btn-send" ${isLoading ? "disabled" : ""}>Send</button>
   </div>`;
 }
@@ -403,17 +411,107 @@ function attachListeners() {
   });
   document.getElementById("btn-export")?.addEventListener("click", exportChat);
 
+  // Upload button
+  document.getElementById("btn-upload")?.addEventListener("click", () => document.getElementById("file-input")?.click());
+  document.getElementById("file-input")?.addEventListener("change", handleFileUpload);
+  document.getElementById("btn-remove-img")?.addEventListener("click", () => { pendingImage = null; render(); });
+
+  // Paste image (Ctrl+V)
+  document.getElementById("chat-input")?.addEventListener("paste", handlePaste);
+
+  // Drag and drop
+  const chatInput = document.getElementById("chat-input");
+  if (chatInput) {
+    chatInput.addEventListener("dragover", e => { e.preventDefault(); chatInput.style.borderColor = "var(--purple)"; });
+    chatInput.addEventListener("dragleave", () => { chatInput.style.borderColor = "var(--border)"; });
+    chatInput.addEventListener("drop", handleDrop);
+  }
+
   // Keyboard shortcuts
   document.addEventListener("keydown", e => {
     if (e.ctrlKey && e.key === "n") { e.preventDefault(); newChat(); }
     if (e.ctrlKey && e.key === "k") { e.preventDefault(); currentTab = "history"; searchQuery = ""; render(); setTimeout(() => document.getElementById("search-input")?.focus(), 0); }
     if (e.ctrlKey && e.key === "/") { e.preventDefault(); voiceMode = !voiceMode; render(); }
+    if (e.ctrlKey && e.key === "u") { e.preventDefault(); document.getElementById("file-input")?.click(); }
   });
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      resolve(result.split(",")[1] || result);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function handleFileUpload(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+
+  if (file.type.startsWith("image/")) {
+    pendingImage = await fileToBase64(file);
+    render();
+  } else {
+    // Text file — read and paste into chat
+    const text = await file.text();
+    const ta = document.getElementById("chat-input") as HTMLTextAreaElement;
+    if (ta) {
+      ta.value += `\n--- ${file.name} ---\n${text.slice(0, 3000)}${text.length > 3000 ? "\n...(truncated)" : ""}`;
+      ta.style.height = ta.scrollHeight + "px";
+    }
+  }
+  input.value = "";
+}
+
+async function handlePaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith("image/")) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) {
+        pendingImage = await fileToBase64(file);
+        render();
+      }
+      return;
+    }
+  }
+}
+
+async function handleDrop(e: DragEvent) {
+  e.preventDefault();
+  const file = e.dataTransfer?.files?.[0];
+  if (!file) return;
+  if (file.type.startsWith("image/")) {
+    pendingImage = await fileToBase64(file);
+    render();
+  } else {
+    const text = await file.text();
+    const ta = document.getElementById("chat-input") as HTMLTextAreaElement;
+    if (ta) ta.value += `\n--- ${file.name} ---\n${text.slice(0, 3000)}`;
+  }
 }
 
 function doSend() {
   const ta = document.getElementById("chat-input") as HTMLTextAreaElement;
-  const text = ta?.value?.trim(); if (!text || isLoading) return;
+  let text = ta?.value?.trim(); if (!text && !pendingImage) return; if (isLoading) return;
+  if (pendingImage) {
+    // Add image to message
+    text = text || "What's in this image?";
+    messages.push({ role: "user", content: text, image: pendingImage });
+    pendingImage = null;
+    ta.value = "";
+    isLoading = true; render();
+    // Send with image context
+    sendImageMessage(text, messages[messages.length - 1].image!);
+    return;
+  }
   ta.value = ""; sendAndRender(text);
 }
 
@@ -455,6 +553,51 @@ async function sendAndRender(text: string) {
 
   // Desktop notification if window not focused
   if (document.hidden) { try { new Notification("Lens", { body: clean.slice(0, 100) }); } catch {} }
+}
+
+async function sendImageMessage(text: string, imageBase64: string) {
+  // Save the upload
+  try { await invoke("save_upload", { name: `img_${Date.now()}.png`, data: imageBase64 }); } catch {}
+
+  // Call vision-capable model with image
+  const apiMsgs = [
+    { role: "system", content: CONFIG.systemPrompt },
+    ...messages.slice(-16).map(m => {
+      if (m.image) {
+        return { role: m.role, content: [
+          { type: "image_url", image_url: { url: `data:image/png;base64,${m.image}` } },
+          { type: "text", text: m.content }
+        ]};
+      }
+      return { role: m.role, content: m.content };
+    })
+  ];
+
+  // Try vision-capable models
+  const visionModels = ["google/gemma-4-26b-a4b-it:free", ...MODELS];
+  let response = "";
+  for (const model of visionModels) {
+    try {
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 15000);
+      const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${CONFIG.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model, messages: apiMsgs, stream: false }),
+        signal: ctrl.signal,
+      });
+      if (!r.ok) continue;
+      const d = await r.json();
+      response = d.choices?.[0]?.message?.content || "";
+      if (response) break;
+    } catch { continue; }
+  }
+
+  if (!response) response = "Couldn't analyze the image. Vision models may be unavailable.";
+  messages.push({ role: "assistant", content: response });
+  isLoading = false;
+  saveCurrentConversation();
+  render();
 }
 
 // ── Init ──

@@ -388,3 +388,13 @@ textarea.panel-input { resize: vertical; min-height: 60px; }
 .tab-content { transition: opacity 0.15s ease; }
 .message { transition: all 0.2s ease; }
 .card { transition: all 0.2s ease; }
+
+/* ── Upload Button ── */
+.input-bar .btn-upload {
+  color: var(--orange);
+  border-color: rgba(249, 115, 22, 0.3);
+}
+.input-bar .btn-upload:hover {
+  border-color: var(--orange);
+  background: rgba(249, 115, 22, 0.1);
+}
