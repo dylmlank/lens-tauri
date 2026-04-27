@@ -17,6 +17,10 @@ let conversations: Conversation[] = [];
 let memories: string[] = [];
 let currentConvoId = "";
 let searchQuery = "";
+let vaultNotes: string[] = [];
+let vaultSearch = "";
+let activeNote = "";
+let activeNoteContent = "";
 let theme = "void";
 let pendingImage: string | null = null;
 let responseCache: Record<string, string> = {};
@@ -303,7 +307,7 @@ async function render() {
   if (!CONFIG.apiKey && !CONFIG.ollamaUrl && await isOllamaRunning()) { CONFIG.ollamaUrl = "http://localhost:11434"; CONFIG.model = "llama3.2"; save("lens-config", CONFIG); }
 
   const sorted = [...conversations].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.created.localeCompare(a.created));
-  const tabs = ["Chat", "Memory", "Tools", "Settings"];
+  const tabs = ["Chat", "Notes", "Memory", "Tools", "Settings"];
 
   app.innerHTML = `
     <div class="sidebar ${sidebarOpen ? "" : "collapsed"}">
@@ -319,6 +323,7 @@ async function render() {
         </div>`).join("") || '<div style="padding:12px 18px;color:var(--muted);font-size:12px">No conversations yet</div>'}
       </div>
       <div class="sidebar-section">
+        <div class="sidebar-item" data-tab="notes"><span class="icon">📝</span> Notes</div>
         <div class="sidebar-item" data-tab="memory"><span class="icon">🧠</span> Memory</div>
         <div class="sidebar-item" data-tab="tools"><span class="icon">🔧</span> Tools</div>
         <div class="sidebar-item" data-tab="settings"><span class="icon">⚙️</span> Settings</div>
@@ -358,6 +363,7 @@ function renderSetup(app: HTMLElement) {
 
 function renderTabContent(): string {
   if (currentTab === "chat") return `<div class="tab-content active">${messages.length === 0 ? renderWelcome() : renderChat()}</div>`;
+  if (currentTab === "notes") return `<div class="tab-content active">${renderNotes()}</div>`;
   if (currentTab === "memory") return `<div class="tab-content active">${renderMemory()}</div>`;
   if (currentTab === "tools") return `<div class="tab-content active">${renderTools()}</div>`;
   if (currentTab === "history") return `<div class="tab-content active">${renderHistory()}</div>`;
@@ -403,6 +409,89 @@ function renderInputBar(): string {
       <textarea id="chat-input" placeholder="Message Lens... (Ctrl+V to paste images)" ${isLoading ? "disabled" : ""}></textarea>
     </div>
     <button class="btn-send" id="btn-send" ${isLoading ? "disabled" : ""}>Send</button>
+  </div>`;
+}
+
+async function loadVaultNotes() {
+  try { const r = await invoke<string>("list_vault_notes"); vaultNotes = r.split("\n").filter(Boolean); } catch { vaultNotes = []; }
+}
+
+async function openNote(path: string) {
+  activeNote = path;
+  try { activeNoteContent = await invoke<string>("read_file", { path: `/home/dylan/Documents/vault/${path}` }); } catch (e) { activeNoteContent = `Error: ${e}`; }
+  render();
+}
+
+async function saveNote() {
+  if (!activeNote) return;
+  const ta = document.getElementById("note-editor") as HTMLTextAreaElement;
+  if (!ta) return;
+  try {
+    await invoke("write_vault_note", { path: activeNote, content: ta.value });
+    activeNoteContent = ta.value;
+  } catch {}
+}
+
+async function createNote() {
+  const name = prompt("Note name (e.g. Ideas/new-idea.md):");
+  if (!name) return;
+  const path = name.endsWith(".md") ? name : name + ".md";
+  try {
+    await invoke("write_vault_note", { path, content: `# ${path.replace(/\.md$/, "").split("/").pop()}\n\n` });
+    await loadVaultNotes();
+    openNote(path);
+  } catch {}
+}
+
+async function searchVault() {
+  if (!vaultSearch.trim()) return;
+  try {
+    const results = await invoke<string>("search_vault", { query: vaultSearch });
+    activeNote = "";
+    activeNoteContent = results;
+    render();
+  } catch {}
+}
+
+function renderNotes(): string {
+  // Split view: file list on left, content on right
+  const filtered = vaultSearch
+    ? vaultNotes.filter(n => n.toLowerCase().includes(vaultSearch.toLowerCase()))
+    : vaultNotes;
+
+  const folders: Record<string, string[]> = {};
+  for (const note of filtered) {
+    const parts = note.split("/");
+    const folder = parts.length > 1 ? parts[0] : "Root";
+    if (!folders[folder]) folders[folder] = [];
+    folders[folder].push(note);
+  }
+
+  const fileList = Object.entries(folders).map(([folder, notes]) =>
+    `<div class="sidebar-section-title" style="padding:4px 0">${folder}</div>
+     ${notes.map(n => `<div class="convo-item ${n === activeNote ? "active" : ""}" data-note="${n}" style="font-size:12px;padding:5px 8px">${n.split("/").pop()?.replace(".md","")}</div>`).join("")}`
+  ).join("");
+
+  const content = activeNote
+    ? `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div class="card-title" style="color:var(--purple)">${activeNote}</div>
+        <div style="display:flex;gap:6px">
+          <button class="btn-small" id="btn-save-note">Save</button>
+          <button class="btn-small" id="btn-ask-note">Ask Lens about this</button>
+        </div>
+      </div>
+      <textarea id="note-editor" class="panel-input" style="flex:1;min-height:300px;font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.6;resize:none">${activeNoteContent.replace(/</g, "&lt;")}</textarea>`
+    : activeNoteContent
+      ? `<div class="card-title" style="color:var(--purple);margin-bottom:8px">Search Results</div><div style="white-space:pre-wrap;font-size:13px;line-height:1.6">${md(activeNoteContent)}</div>`
+      : `<div class="panel-empty">Select a note or search your vault</div>`;
+
+  return `<div style="display:flex;flex:1;overflow:hidden">
+    <div style="width:200px;min-width:200px;border-right:1px solid var(--border);overflow-y:auto;padding:8px 0">
+      <div style="padding:4px 8px"><input id="vault-search" class="panel-input" placeholder="Search notes..." value="${vaultSearch}" style="font-size:12px;padding:6px 10px"></div>
+      <div style="padding:4px 8px;margin-bottom:4px"><button class="btn-small" id="btn-new-note" style="width:100%">+ New Note</button></div>
+      ${fileList}
+    </div>
+    <div style="flex:1;padding:16px;display:flex;flex-direction:column;overflow-y:auto">${content}</div>
   </div>`;
 }
 
@@ -467,6 +556,16 @@ function attachListeners() {
     document.getElementById("template-menu")?.classList.remove("show");
   }));
   document.addEventListener("click", () => document.getElementById("template-menu")?.classList.remove("show"));
+
+  // Notes
+  document.querySelectorAll("[data-note]").forEach(el => el.addEventListener("click", () => openNote((el as HTMLElement).dataset.note || "")));
+  document.getElementById("btn-new-note")?.addEventListener("click", () => createNote());
+  document.getElementById("btn-save-note")?.addEventListener("click", () => saveNote());
+  document.getElementById("btn-ask-note")?.addEventListener("click", () => {
+    if (activeNoteContent) { currentTab = "chat"; sendAndRender(`Here's my note "${activeNote}":\n\n${activeNoteContent.slice(0, 1000)}\n\nSummarize the key points.`); }
+  });
+  document.getElementById("vault-search")?.addEventListener("input", e => { vaultSearch = (e.target as HTMLInputElement).value; render(); setTimeout(() => { const si = document.getElementById("vault-search") as HTMLInputElement; if (si) { si.focus(); si.setSelectionRange(vaultSearch.length, vaultSearch.length); } }, 0); });
+  document.getElementById("vault-search")?.addEventListener("keydown", e => { if (e.key === "Enter") searchVault(); });
 
   document.getElementById("btn-upload")?.addEventListener("click", () => document.getElementById("file-input")?.click());
   document.getElementById("file-input")?.addEventListener("change", handleFileUpload);
@@ -572,5 +671,6 @@ async function sendImageMessage(text: string, img: string) {
 
 // ── Init ──
 init();
+loadVaultNotes();
 Notification.requestPermission().catch(() => {});
 render();
