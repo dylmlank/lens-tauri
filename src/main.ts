@@ -57,6 +57,120 @@ async function callLLM(): Promise<string> {
   return "All models busy. Try again.";
 }
 
+// ── Tool Execution ──
+async function runTool(name: string, args: Record<string, string>): Promise<string> {
+  try {
+    const result = await invoke<string>(name === "run_command" ? "run_command" :
+                                        name === "read_file" ? "read_file" :
+                                        name === "write_file" ? "write_file" : "run_command",
+      name === "run_command" ? { command: args.command || "" } :
+      name === "read_file" ? { path: args.path || "" } :
+      name === "write_file" ? { path: args.path || "", content: args.content || "" } :
+      { command: `echo "Unknown tool: ${name}"` }
+    );
+    return result;
+  } catch (e) {
+    return `Error: ${e}`;
+  }
+}
+
+function parseToolCalls(text: string): { name: string; args: Record<string, string> }[] {
+  const calls: { name: string; args: Record<string, string> }[] = [];
+
+  // [TOOL:name key=value]
+  const re1 = /\[TOOL:(\w+)\s*(.*?)\]/gs;
+  // [TOOL:name="tool" key="value"]
+  const re2 = /\[TOOL:name="([\w.-]+)"\s*(.*?)\]/gs;
+
+  for (const re of [re2, re1]) {
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let name = m[1];
+      let argsStr = m[2] || "";
+
+      // Strip [/TOOL...]
+      argsStr = argsStr.replace(/\[\/TOOL[^\]]*\]?$/g, "").trim();
+
+      // Normalize name
+      for (const prefix of ["desktop-commander_", "cli-mcp-server_", "filesystem.", "github_"]) {
+        if (name.startsWith(prefix)) name = name.slice(prefix.length);
+      }
+      const renames: Record<string, string> = {
+        "list_directory": "list_files", "cli:run": "run_command", "run": "run_command",
+        "exec": "run_command", "search_repositories": "web_search",
+      };
+      name = renames[name] || name;
+
+      // Parse args
+      const args: Record<string, string> = {};
+      // Unwrap args="..."
+      const argsWrap = argsStr.match(/^args="(.*)"$/s);
+      if (argsWrap) argsStr = argsWrap[1].replace(/\\"/g, '"');
+
+      // key=value or key="value"
+      const keyRe = /(?:^|\s)(\w+)=/g;
+      const positions: { key: string; start: number }[] = [];
+      let km;
+      while ((km = keyRe.exec(argsStr)) !== null) {
+        positions.push({ key: km[1], start: km.index + km[0].length });
+      }
+      for (let i = 0; i < positions.length; i++) {
+        const end = i + 1 < positions.length ? positions[i + 1].start - positions[i + 1].key.length - 1 : argsStr.length;
+        let val = argsStr.slice(positions[i].start, end).trim();
+        if (val.startsWith('"') && val.endsWith('"')) val = val.slice(1, -1);
+        args[positions[i].key] = val;
+      }
+
+      // key="X" value="Y" format
+      if (args.key && args.value && Object.keys(args).length === 2) {
+        const realKey = args.key;
+        const realVal = args.value;
+        delete args.key;
+        delete args.value;
+        args[realKey] = realVal;
+      }
+
+      // Alias: cmd -> command, file -> path
+      if (args.cmd) { args.command = args.cmd; delete args.cmd; }
+      if (args.file) { args.path = args.file; delete args.file; }
+      if (args.dir) { args.path = args.dir; delete args.dir; }
+
+      calls.push({ name, args });
+    }
+    if (calls.length > 0) break;
+  }
+  return calls;
+}
+
+function stripToolTokens(text: string): string {
+  return text
+    .replace(/\[TOOL[\s\S]*?\[\/TOOL[^\]]*\]/g, "")
+    .replace(/\[TOOL:[^\]]*\]/g, "")
+    .replace(/\[\/TOOL[^\]]*\]/g, "")
+    .replace(/\[WRITE_FILE:[^\]]+\][\s\S]*?\[\/WRITE_FILE\]/g, "")
+    .replace(/\[CAPTURE\]/g, "")
+    .replace(/\[REMEMBER\][\s\S]*?\[\/REMEMBER\]/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function executeToolsInResponse(response: string): Promise<string> {
+  const calls = parseToolCalls(response);
+  if (calls.length === 0) return response;
+
+  // Execute all tool calls
+  const results: string[] = [];
+  for (const call of calls) {
+    const result = await runTool(call.name, call.args);
+    results.push(`[${call.name}]: ${result.slice(0, 500)}`);
+  }
+
+  // Add results to conversation and ask LLM to continue
+  messages.push({ role: "user", content: `[results] ${results.join("\n").slice(0, 1000)}\nSummarize what you did.` });
+  const followup = await callLLM();
+  return followup;
+}
+
 // ── Markdown ──
 function md(text: string): string {
   let s = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -118,7 +232,8 @@ function render() {
     : `<div class="chat-area">${messages.filter(m => m.role !== "system").map(m => {
         const cls = m.role === "user" ? "user" : "lens";
         const label = m.role === "user" ? "YOU" : "LENS";
-        const body = m.role === "user" ? m.content.replace(/</g, "&lt;").replace(/\n/g, "<br>") : md(m.content);
+        const content = m.role === "user" ? m.content : stripToolTokens(m.content);
+        const body = m.role === "user" ? content.replace(/</g, "&lt;").replace(/\n/g, "<br>") : md(content);
         return `<div class="message ${cls}"><div class="role">${label}</div><div class="body">${body}</div></div>`;
       }).join("")}${isLoading ? '<div class="thinking">Working on it...</div>' : ''}</div>`;
 
@@ -234,8 +349,18 @@ async function sendAndRender(text: string) {
   isLoading = true;
   render();
 
-  const response = await callLLM();
-  messages.push({ role: "assistant", content: response });
+  let response = await callLLM();
+
+  // Execute any tools in the response
+  const toolCalls = parseToolCalls(response);
+  if (toolCalls.length > 0) {
+    messages.push({ role: "assistant", content: response });
+    response = await executeToolsInResponse(response);
+  }
+
+  // Clean tool tokens from displayed response
+  const clean = stripToolTokens(response);
+  messages.push({ role: "assistant", content: clean || response });
   isLoading = false;
   render();
 }
