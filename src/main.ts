@@ -361,9 +361,12 @@ function renderChat(): string {
 }
 
 function renderInputBar(): string {
-  const templates = promptTemplates.map(t => `<div class="template-chip" data-template="${t.prompt}">${t.name}</div>`).join("");
-  return `<div class="template-bar">${templates}</div>
-  <div class="input-bar">
+  const templateOptions = promptTemplates.map(t => `<div class="dropdown-item" data-template="${t.prompt}">${t.name}</div>`).join("");
+  return `<div class="input-bar">
+    <div class="dropdown" id="template-dropdown">
+      <button class="btn-icon btn-templates" id="btn-templates">Templates ▾</button>
+      <div class="dropdown-menu" id="template-menu">${templateOptions}</div>
+    </div>
     <button class="btn-icon btn-voice ${voiceMode ? "active" : ""}" id="btn-voice">${voiceMode ? "Voice ON" : "Voice"}</button>
     <button class="btn-icon btn-upload" id="btn-upload">Upload</button>
     <input type="file" id="file-input" style="display:none" accept="image/*,.txt,.py,.js,.ts,.json,.md,.csv,.html,.css">
@@ -416,11 +419,23 @@ function attachListeners() {
   document.querySelectorAll(".tab[data-tab]").forEach(el => el.addEventListener("click", () => { currentTab = (el as HTMLElement).dataset.tab || "chat"; render(); }));
   document.getElementById("btn-new-chat")?.addEventListener("click", newChat);
   document.querySelectorAll(".suggestion").forEach(el => el.addEventListener("click", () => sendAndRender((el as HTMLElement).dataset.suggestion || "")));
-  document.querySelectorAll(".template-chip").forEach(el => el.addEventListener("click", () => { const ta = document.getElementById("chat-input") as HTMLTextAreaElement; if (ta) { ta.value = (el as HTMLElement).dataset.template + " " + ta.value; ta.focus(); } }));
+  // (templates handled by dropdown above)
   document.getElementById("btn-send")?.addEventListener("click", doSend);
   document.getElementById("chat-input")?.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doSend(); } });
   document.getElementById("chat-input")?.addEventListener("input", e => { const ta = e.target as HTMLTextAreaElement; ta.style.height = "48px"; ta.style.height = ta.scrollHeight + "px"; });
   document.getElementById("btn-voice")?.addEventListener("click", () => { voiceMode = !voiceMode; render(); });
+  // Templates dropdown
+  document.getElementById("btn-templates")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    document.getElementById("template-menu")?.classList.toggle("show");
+  });
+  document.querySelectorAll(".dropdown-item[data-template]").forEach(el => el.addEventListener("click", () => {
+    const ta = document.getElementById("chat-input") as HTMLTextAreaElement;
+    if (ta) { ta.value = (el as HTMLElement).dataset.template + " " + ta.value; ta.focus(); }
+    document.getElementById("template-menu")?.classList.remove("show");
+  }));
+  document.addEventListener("click", () => document.getElementById("template-menu")?.classList.remove("show"));
+
   document.getElementById("btn-upload")?.addEventListener("click", () => document.getElementById("file-input")?.click());
   document.getElementById("file-input")?.addEventListener("change", handleFileUpload);
   document.getElementById("btn-remove-img")?.addEventListener("click", () => { pendingImage = null; render(); });
@@ -511,51 +526,15 @@ async function sendAndRender(text: string) {
 }
 
 async function sendImageMessage(text: string, img: string) {
+  // Use Rust backend — handles long timeouts properly
   let response = "";
-
-  // Try local Ollama vision models — smallest first for speed
-  for (const model of ["moondream", "minicpm-v", "llama3.2-vision"]) {
-    if (response) break;
-    try {
-      const r = await fetch("http://localhost:11434/api/chat", {
-        method: "POST",
-        body: JSON.stringify({
-          model,
-          messages: [{ role: "user", content: text, images: [img] }],
-          stream: false,
-        }),
-        signal: AbortSignal.timeout(60000),
-      });
-      if (r.ok) {
-        const d = await r.json();
-        response = d.message?.content || "";
-      }
-    } catch {}
+  try {
+    response = await invoke<string>("analyze_image", { prompt: text, imageBase64: img });
+  } catch (e) {
+    response = `Error analyzing image: ${e}`;
   }
 
-  // Last resort: OpenRouter with vision-capable model
-  if (!response && CONFIG.apiKey) {
-    const apiMsgs = [{ role: "user", content: [
-      { type: "image_url", image_url: { url: `data:image/png;base64,${img}` } },
-      { type: "text", text: text }
-    ]}];
-    for (const model of ["google/gemma-4-26b-a4b-it:free", "openrouter/free"]) {
-      try {
-        const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: { "Authorization": `Bearer ${CONFIG.apiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model, messages: apiMsgs, stream: false }),
-          signal: AbortSignal.timeout(15000),
-        });
-        if (!r.ok) continue;
-        const d = await r.json();
-        response = d.choices?.[0]?.message?.content || "";
-        if (response) break;
-      } catch { continue; }
-    }
-  }
-
-  messages.push({ role: "assistant", content: response || "Couldn't analyze the image — no vision model available. Make sure Ollama is running with llama3.2-vision.", id: uid() });
+  messages.push({ role: "assistant", content: response, id: uid() });
   isLoading = false; saveConvo(); render();
 }
 
