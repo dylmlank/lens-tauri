@@ -32,26 +32,48 @@ const MODELS = [
   "inclusionai/ling-2.6-flash:free",
 ];
 
-async function callLLM(): Promise<string> {
+async function callLLM(onToken?: (token: string) => void): Promise<string> {
   const apiMsgs = [{ role: "system", content: CONFIG.systemPrompt }, ...messages.slice(-20)];
   const models = [CONFIG.model, ...MODELS.filter(m => m !== CONFIG.model)];
 
   for (const model of models) {
     try {
       const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 12000);
+      const t = setTimeout(() => ctrl.abort(), 15000);
       const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: { "Authorization": `Bearer ${CONFIG.apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model, messages: apiMsgs, stream: false }),
+        body: JSON.stringify({ model, messages: apiMsgs, stream: true }),
         signal: ctrl.signal,
       });
       clearTimeout(t);
       if (r.status === 401) return "Invalid API key. Click Settings to update.";
       if (!r.ok) continue;
-      const d = await r.json();
-      const txt = d.choices?.[0]?.message?.content || "";
-      if (txt) return txt;
+
+      // Stream tokens
+      const reader = r.body?.getReader();
+      if (!reader) continue;
+      const decoder = new TextDecoder();
+      let full = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+          try {
+            const json = JSON.parse(line.slice(6));
+            const token = json.choices?.[0]?.delta?.content || "";
+            if (token) {
+              full += token;
+              onToken?.(token);
+            }
+          } catch {}
+        }
+      }
+
+      if (full) return full;
     } catch { continue; }
   }
   return "All models busy. Try again.";
@@ -349,18 +371,39 @@ async function sendAndRender(text: string) {
   isLoading = true;
   render();
 
-  let response = await callLLM();
+  // Stream tokens live into the chat
+  let streamedText = "";
+  const response = await callLLM((token) => {
+    streamedText += token;
+    // Update the chat display with partial response
+    const chatArea = document.querySelector(".chat-area");
+    const thinking = document.querySelector(".thinking");
+    if (thinking) thinking.remove();
 
-  // Execute any tools in the response
+    // Find or create the streaming message
+    let streamMsg = document.getElementById("streaming-msg");
+    if (!streamMsg) {
+      streamMsg = document.createElement("div");
+      streamMsg.id = "streaming-msg";
+      streamMsg.className = "message lens";
+      streamMsg.innerHTML = '<div class="role">LENS</div><div class="body"></div>';
+      chatArea?.appendChild(streamMsg);
+    }
+    const body = streamMsg.querySelector(".body");
+    if (body) body.textContent = streamedText;
+    if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
+  });
+
+  // Execute tools if present
+  let finalResponse = response;
   const toolCalls = parseToolCalls(response);
   if (toolCalls.length > 0) {
     messages.push({ role: "assistant", content: response });
-    response = await executeToolsInResponse(response);
+    finalResponse = await executeToolsInResponse(response);
   }
 
-  // Clean tool tokens from displayed response
-  const clean = stripToolTokens(response);
-  messages.push({ role: "assistant", content: clean || response });
+  const clean = stripToolTokens(finalResponse);
+  messages.push({ role: "assistant", content: clean || finalResponse });
   isLoading = false;
   render();
 }
