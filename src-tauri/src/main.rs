@@ -171,39 +171,39 @@ async fn ollama_chat(model: String, messages_json: String) -> Result<String, Str
 #[tauri::command]
 async fn analyze_image(prompt: String, image_base64: String, gemini_key: String) -> Result<String, String> {
     let result = tokio::task::spawn_blocking(move || {
-        // Try Gemini Vision API first (fast, accurate, free)
         if !gemini_key.is_empty() {
+            // Write request body to temp file (base64 is too large for command line)
             let body = serde_json::json!({
-                "contents": [{
-                    "parts": [
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": "image/png", "data": image_base64}}
-                    ]
-                }]
+                "contents": [{"parts": [
+                    {"text": prompt},
+                    {"inline_data": {"mime_type": "image/png", "data": image_base64}}
+                ]}]
             });
+            let tmp_body = "/tmp/lens_gemini_body.json";
+            let _ = std::fs::write(tmp_body, body.to_string());
 
-            // Try multiple Gemini models (2.0-flash may hit quota, 2.5-flash has separate quota)
-            for gemini_model in &["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"] {
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-                gemini_model, gemini_key
-            );
-
-            let out = std::process::Command::new("curl")
-                .args(["-s", "-m", "30", &url,
-                       "-H", "Content-Type: application/json", "-d", &body.to_string()])
-                .output();
-
-            if let Ok(o) = out {
-                if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                    if let Some(text) = parsed["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                        if !text.is_empty() {
-                            return text.to_string();
+            for model in &["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"] {
+                let url = format!(
+                    "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                    model, gemini_key
+                );
+                let out = std::process::Command::new("curl")
+                    .args(["-s", "-m", "30", &url,
+                           "-H", "Content-Type: application/json",
+                           "-d", &format!("@{}", tmp_body)])
+                    .output();
+                if let Ok(o) = out {
+                    if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                        if let Some(text) = parsed["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                            if !text.is_empty() {
+                                let _ = std::fs::remove_file(tmp_body);
+                                return text.to_string();
+                            }
                         }
                     }
                 }
             }
-            } // end for gemini_model
+            let _ = std::fs::remove_file(tmp_body);
         }
 
         // Fallback: OCR + text model
@@ -213,24 +213,15 @@ async fn analyze_image(prompt: String, image_base64: String, gemini_key: String)
         } else {
             return "Error: invalid image data".to_string();
         }
-
         let _ = std::process::Command::new("tesseract").args([tmp_img, "/tmp/lens_ocr", "-l", "eng"]).output();
         let text = std::fs::read_to_string("/tmp/lens_ocr.txt").unwrap_or_default();
         let _ = std::fs::remove_file(tmp_img);
         let _ = std::fs::remove_file("/tmp/lens_ocr.txt");
 
         if text.trim().is_empty() {
-            return "I can see your image but need a Gemini API key for full visual analysis. Get one free at aistudio.google.com/apikey and add it in Settings.".to_string();
+            return "Add a Gemini API key in Settings for full image analysis (free at aistudio.google.com/apikey)".to_string();
         }
-
-        let body = serde_json::json!({"model":"llama3.2","messages":[{"role":"user","content":format!("{}\n\nText from image:\n{}",prompt,&text[..text.len().min(2000)])}],"stream":false});
-        let out = std::process::Command::new("curl").args(["-s","-m","30","http://localhost:11434/api/chat","-H","Content-Type: application/json","-d",&body.to_string()]).output();
-        if let Ok(o) = out {
-            if let Ok(p) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                if let Some(c) = p["message"]["content"].as_str() { return c.to_string(); }
-            }
-        }
-        format!("Extracted text: {}", &text[..text.len().min(300)])
+        format!("Text from image: {}", &text[..text.len().min(500)])
     }).await.map_err(|e| e.to_string())?;
     Ok(result)
 }
