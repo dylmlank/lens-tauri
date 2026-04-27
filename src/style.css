@@ -398,3 +398,54 @@ textarea.panel-input { resize: vertical; min-height: 60px; }
   border-color: var(--orange);
   background: rgba(249, 115, 22, 0.1);
 }
+
+/* ── Animations ── */
+.anim-in { animation: slideIn 0.25s ease forwards; }
+@keyframes slideIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+
+/* ── Skeleton Loading ── */
+.skeleton { height: 14px; border-radius: 6px; background: linear-gradient(90deg, var(--surface) 25%, var(--border) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; margin: 6px 0; }
+.skeleton.short { width: 60%; }
+@keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* ── Message Actions (hover) ── */
+.msg-actions { position: absolute; top: 8px; right: 12px; display: none; gap: 4px; }
+.message:hover .msg-actions { display: flex; }
+.message { position: relative; }
+.msg-btn { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
+.msg-btn:hover { border-color: var(--purple); background: var(--bg2); }
+
+/* ── Message Image ── */
+.msg-img { max-width: 300px; max-height: 200px; border-radius: 10px; margin: 8px 0; border: 1px solid var(--border); }
+
+/* ── Pending Image ── */
+.pending-img { max-height: 60px; border-radius: 8px; border: 1px solid var(--border); }
+.remove-img { position: absolute; top: -6px; right: -6px; background: var(--pink); color: white; border: none; border-radius: 50%; width: 18px; height: 18px; font-size: 11px; cursor: pointer; line-height: 16px; }
+
+/* ── Template Bar ── */
+.template-bar { display: flex; gap: 6px; padding: 6px 24px 0; overflow-x: auto; }
+.template-bar::-webkit-scrollbar { height: 0; }
+.template-chip { padding: 5px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg2); color: var(--text-muted); font-size: 11px; cursor: pointer; white-space: nowrap; transition: all 0.15s; }
+.template-chip:hover { border-color: var(--purple); color: var(--text); }
+
+/* ── Syntax Highlighting (dark) ── */
+.hljs { background: transparent !important; }
+.hljs-keyword { color: var(--purple); }
+.hljs-string { color: var(--green); }
+.hljs-number { color: var(--orange); }
+.hljs-comment { color: var(--text-muted); font-style: italic; }
+.hljs-function { color: var(--cyan); }
+.hljs-title { color: var(--cyan); }
+.hljs-built_in { color: var(--pink); }
+.hljs-attr { color: var(--orange); }
+.hljs-params { color: var(--text); }
+
+/* ── Responsive ── */
+@media (max-width: 600px) {
+  .message { max-width: 100%; margin: 6px 8px; padding: 10px 14px; }
+  .input-bar { padding: 8px 12px 14px; }
+  .tab { padding: 10px 14px; font-size: 12px; }
+  .welcome-logo { font-size: 40px; }
+  .suggestions { flex-direction: column; align-items: center; }
+  .template-bar { padding: 4px 12px 0; }
+}
