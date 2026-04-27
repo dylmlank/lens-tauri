@@ -335,9 +335,9 @@ function renderChat(): string {
     const body = m.role === "user" ? c.replace(/</g, "&lt;").replace(/\n/g, "<br>") : md(c);
     const img = m.image ? `<img src="data:image/png;base64,${m.image}" class="msg-img">` : "";
     const actions = `<div class="msg-actions">
-      <button class="msg-btn" data-copy="${m.id}" title="Copy">📋</button>
-      ${m.role === "user" ? `<button class="msg-btn" data-branch="${m.id}" title="Branch from here">🔀</button>` : ""}
-      ${m.role === "assistant" ? `<button class="msg-btn" data-retry title="Retry">🔄</button>` : ""}
+      <button class="msg-btn has-tooltip" data-copy="${m.id}">📋<span class="tooltip">Copy</span></button>
+      ${m.role === "user" ? `<button class="msg-btn has-tooltip" data-branch="${m.id}">🔀<span class="tooltip">Branch</span></button>` : ""}
+      ${m.role === "assistant" ? `<button class="msg-btn has-tooltip" data-retry>🔄<span class="tooltip">Retry</span></button>` : ""}
     </div>`;
     return `<div class="message ${cls} anim-in">${actions}<div class="role">${label}</div>${img}<div class="body">${body}</div></div>`;
   }).join("");

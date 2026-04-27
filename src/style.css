@@ -449,3 +449,39 @@ textarea.panel-input { resize: vertical; min-height: 60px; }
   .suggestions { flex-direction: column; align-items: center; }
   .template-bar { padding: 4px 12px 0; }
 }
+
+/* ── Hover Tooltips ── */
+.has-tooltip {
+  position: relative;
+}
+.tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.9);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: all 0.15s ease;
+  z-index: 10;
+}
+.tooltip::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--border);
+}
+.has-tooltip:hover .tooltip {
+  opacity: 1;
+  transform: translateX(-50%) scale(1);
+}
