@@ -295,19 +295,47 @@ async function isOllamaRunning(): Promise<boolean> {
 }
 
 // ── Render ──
+let sidebarOpen = true;
+
 async function render() {
   const app = document.getElementById("app")!;
-  // Can work with just Ollama (no API key needed)
   if (!CONFIG.apiKey && !CONFIG.ollamaUrl && !await isOllamaRunning()) { renderSetup(app); return; }
   if (!CONFIG.apiKey && !CONFIG.ollamaUrl && await isOllamaRunning()) { CONFIG.ollamaUrl = "http://localhost:11434"; CONFIG.model = "llama3.2"; save("lens-config", CONFIG); }
 
-  const tabs = ["Chat", "Memory", "Tools", "History", "Settings"];
+  const sorted = [...conversations].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || b.created.localeCompare(a.created));
+  const tabs = ["Chat", "Memory", "Tools", "Settings"];
+
   app.innerHTML = `
-    <div class="tab-bar">${tabs.map(t => `<div class="tab ${currentTab === t.toLowerCase() ? "active" : ""}" data-tab="${t.toLowerCase()}">${t}</div>`).join("")}
-    <div style="flex:1"></div><div class="tab" id="btn-new-chat" title="Ctrl+N">+ New</div></div>
-    ${renderTabContent()}
-    ${currentTab === "chat" ? renderInputBar() : ""}
-    <div class="model-bar">${CONFIG.model}${isLoading ? " • streaming..." : ""} • ${theme}</div>`;
+    <div class="sidebar ${sidebarOpen ? "" : "collapsed"}">
+      <div class="sidebar-header">
+        <span class="sidebar-logo">Lens</span>
+        <button class="sidebar-btn" id="btn-collapse">✕</button>
+      </div>
+      <div class="new-chat-btn" id="btn-new-chat">+ New Chat</div>
+      <div class="sidebar-section-title">Conversations</div>
+      <div class="convo-list">
+        ${sorted.map(c => `<div class="convo-item ${c.id === currentConvoId ? "active" : ""}" data-convo="${c.id}">
+          ${c.pinned ? '<span class="pin">📌</span> ' : ""}${c.title}
+        </div>`).join("") || '<div style="padding:12px 18px;color:var(--muted);font-size:12px">No conversations yet</div>'}
+      </div>
+      <div class="sidebar-section">
+        <div class="sidebar-item" data-tab="memory"><span class="icon">🧠</span> Memory</div>
+        <div class="sidebar-item" data-tab="tools"><span class="icon">🔧</span> Tools</div>
+        <div class="sidebar-item" data-tab="settings"><span class="icon">⚙️</span> Settings</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="topbar">
+        <button class="topbar-toggle" id="btn-sidebar">${sidebarOpen ? "◀" : "☰"}</button>
+        <div class="topbar-nav">
+          ${tabs.map(t => `<button class="topbar-tab ${currentTab === t.toLowerCase() ? "active" : ""}" data-tab="${t.toLowerCase()}">${t}</button>`).join("")}
+        </div>
+        <div class="topbar-model">${CONFIG.model.split("/").pop()?.replace(":free", "") || CONFIG.model}${isLoading ? " • streaming..." : ""}</div>
+      </div>
+      ${renderTabContent()}
+      ${currentTab === "chat" ? `<div class="input-wrapper">${renderInputBar()}</div>` : ""}
+    </div>`;
+
   attachListeners();
   const ca = document.querySelector(".chat-area"); if (ca) ca.scrollTop = ca.scrollHeight;
   const ta = document.getElementById("chat-input") as HTMLTextAreaElement; if (ta && !isLoading) ta.focus();
@@ -416,8 +444,12 @@ function renderSettings(): string {
 
 // ── Event Listeners ──
 function attachListeners() {
-  document.querySelectorAll(".tab[data-tab]").forEach(el => el.addEventListener("click", () => { currentTab = (el as HTMLElement).dataset.tab || "chat"; render(); }));
+  // Sidebar + tabs
+  document.querySelectorAll("[data-tab]").forEach(el => el.addEventListener("click", () => { currentTab = (el as HTMLElement).dataset.tab || "chat"; render(); }));
   document.getElementById("btn-new-chat")?.addEventListener("click", newChat);
+  document.getElementById("btn-collapse")?.addEventListener("click", () => { sidebarOpen = false; render(); });
+  document.getElementById("btn-sidebar")?.addEventListener("click", () => { sidebarOpen = !sidebarOpen; render(); });
+  document.querySelectorAll(".convo-item[data-convo]").forEach(el => el.addEventListener("click", () => loadConvo((el as HTMLElement).dataset.convo || "")));
   document.querySelectorAll(".suggestion").forEach(el => el.addEventListener("click", () => sendAndRender((el as HTMLElement).dataset.suggestion || "")));
   // (templates handled by dropdown above)
   document.getElementById("btn-send")?.addEventListener("click", doSend);
