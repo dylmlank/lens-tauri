@@ -60,7 +60,14 @@ function init() {
   conversations = load("lens-convos", []);
   memories = load("lens-memories", []);
   theme = localStorage.getItem("lens-theme") || "void";
-  promptTemplates = load("lens-templates", promptTemplates);
+  const savedTemplates = load("lens-templates", null);
+  // Use saved if user has customized, otherwise use defaults (which may have new ones)
+  if (savedTemplates && savedTemplates.length >= promptTemplates.length) {
+    promptTemplates = savedTemplates;
+  } else {
+    // Merge: keep user's customizations + add any new defaults
+    save("lens-templates", promptTemplates);
+  }
   responseCache = load("lens-cache", {});
   applyTheme();
 }
@@ -506,34 +513,18 @@ async function sendAndRender(text: string) {
 async function sendImageMessage(text: string, img: string) {
   let response = "";
 
-  // Try local Ollama vision model first (llama3.2-vision is installed)
-  try {
-    const r = await fetch("http://localhost:11434/api/chat", {
-      method: "POST",
-      body: JSON.stringify({
-        model: "llama3.2-vision",
-        messages: [{ role: "user", content: text, images: [img] }],
-        stream: false,
-      }),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (r.ok) {
-      const d = await r.json();
-      response = d.message?.content || "";
-    }
-  } catch {}
-
-  // Fallback: try minicpm-v (also installed locally)
-  if (!response) {
+  // Try local Ollama vision models — smallest first for speed
+  for (const model of ["moondream", "minicpm-v", "llama3.2-vision"]) {
+    if (response) break;
     try {
       const r = await fetch("http://localhost:11434/api/chat", {
         method: "POST",
         body: JSON.stringify({
-          model: "minicpm-v",
+          model,
           messages: [{ role: "user", content: text, images: [img] }],
           stream: false,
         }),
-        signal: AbortSignal.timeout(30000),
+        signal: AbortSignal.timeout(60000),
       });
       if (r.ok) {
         const d = await r.json();
