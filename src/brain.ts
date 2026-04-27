@@ -92,3 +92,11 @@ export function isGoodResponse(question: string, answer: string): boolean {
   if (qWords.size > 3 && overlap === 0) return false; // No word overlap at all
   return true;
 }
+
+// ── Obsidian Vault Integration ──
+export const VAULT_PATH = "/home/dylan/Documents/vault";
+
+export function getVaultContext(): string {
+  // This runs in the Tauri context — we'll call it via invoke
+  return VAULT_PATH;
+}

@@ -69,12 +69,88 @@ fn take_screenshot() -> Result<String, String> {
     Ok(base64::engine::general_purpose::STANDARD.encode(&data))
 }
 
+#[tauri::command]
+fn search_vault(query: String) -> String {
+    let vault = dirs::home_dir().unwrap_or_default().join("Documents/vault");
+    if !vault.is_dir() { return "Vault not found at ~/Documents/vault".to_string(); }
+
+    let query_lower = query.to_lowercase();
+    let mut results = Vec::new();
+
+    fn walk(dir: &std::path::Path, query: &str, results: &mut Vec<String>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && !path.file_name().map_or(false, |n| n.to_str().map_or(false, |s| s.starts_with('.'))) {
+                    walk(&path, query, results);
+                } else if path.extension().map_or(false, |e| e == "md") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        if content.to_lowercase().contains(query) {
+                            let name = path.strip_prefix(dirs::home_dir().unwrap_or_default().join("Documents/vault")).unwrap_or(&path);
+                            // Get matching lines
+                            let matches: Vec<&str> = content.lines()
+                                .filter(|l| l.to_lowercase().contains(query))
+                                .take(3)
+                                .collect();
+                            results.push(format!("**{}**\n{}", name.display(), matches.join("\n")));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    walk(&vault, &query_lower, &mut results);
+
+    if results.is_empty() {
+        format!("No notes found matching '{}'", query)
+    } else {
+        results.into_iter().take(5).collect::<Vec<_>>().join("\n\n---\n\n")
+    }
+}
+
+#[tauri::command]
+fn list_vault_notes() -> String {
+    let vault = dirs::home_dir().unwrap_or_default().join("Documents/vault");
+    if !vault.is_dir() { return "Vault not found".to_string(); }
+
+    let mut notes = Vec::new();
+    fn walk(dir: &std::path::Path, base: &std::path::Path, notes: &mut Vec<String>) {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() && !path.file_name().map_or(false, |n| n.to_str().map_or(false, |s| s.starts_with('.'))) {
+                    walk(&path, base, notes);
+                } else if path.extension().map_or(false, |e| e == "md") {
+                    let name = path.strip_prefix(base).unwrap_or(&path);
+                    notes.push(name.display().to_string());
+                }
+            }
+        }
+    }
+    walk(&vault, &vault, &mut notes);
+    notes.sort();
+    notes.join("\n")
+}
+
+#[tauri::command]
+fn write_vault_note(path: String, content: String) -> String {
+    let vault = dirs::home_dir().unwrap_or_default().join("Documents/vault");
+    let full = vault.join(&path);
+    if let Some(parent) = full.parent() { let _ = std::fs::create_dir_all(parent); }
+    match std::fs::write(&full, &content) {
+        Ok(_) => format!("Wrote note: {}", path),
+        Err(e) => format!("Error: {}", e),
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             run_command, read_file, write_file,
-            read_file_base64, save_upload, take_screenshot
+            read_file_base64, save_upload, take_screenshot,
+            search_vault, list_vault_notes, write_vault_note
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
