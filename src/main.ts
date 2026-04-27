@@ -27,9 +27,7 @@ function saveConfig() {
 }
 
 // ── API ──
-async function chat(userMessage: string): Promise<string> {
-  messages.push({ role: "user", content: userMessage });
-
+async function callLLM(): Promise<string> {
   const body = {
     model: CONFIG.model,
     messages: [
@@ -49,23 +47,25 @@ async function chat(userMessage: string): Promise<string> {
 
   for (const model of fallbackModels) {
     try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 12000);
+
       const resp = await fetch("https://openrouter.ai/api/v1/chat/completions", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${CONFIG.apiKey}`,
+          "Authorization": `Bearer ${CONFIG.apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({ ...body, model }),
-        signal: AbortSignal.timeout(12000),
+        signal: controller.signal,
       });
 
+      clearTimeout(timer);
       if (!resp.ok) continue;
+
       const data = await resp.json();
       const text = data.choices?.[0]?.message?.content || "";
-      if (text) {
-        messages.push({ role: "assistant", content: text });
-        return text;
-      }
+      if (text) return text;
     } catch {
       continue;
     }
@@ -258,23 +258,22 @@ function renderTools(): string {
 };
 
 async function sendAndRender(text: string) {
+  // Add user message and show it
   messages.push({ role: "user", content: text });
   render();
 
-  // Show thinking
+  // Show thinking indicator
   const chatArea = document.querySelector(".chat-area");
   if (chatArea) {
     chatArea.innerHTML += '<div class="thinking">Working on it...</div>';
     chatArea.scrollTop = chatArea.scrollHeight;
   }
 
-  const response = await chat(text);
-  // Remove the user message we added (chat() adds it again)
-  messages.pop();
-  messages.pop();
-  messages.push({ role: "user", content: text });
-  messages.push({ role: "assistant", content: response });
+  // Call LLM (messages already has the user msg)
+  const response = await callLLM();
 
+  // Add assistant response
+  messages.push({ role: "assistant", content: response });
   render();
 }
 
