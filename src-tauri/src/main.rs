@@ -149,41 +149,45 @@ async fn ollama_chat(model: String, messages_json: String, gemini_key: String) -
     let result = tokio::task::spawn_blocking(move || {
         // Try Gemini first (1-2s) — much faster than Ollama (7s+)
         if !gemini_key.is_empty() {
-            // Convert OpenAI-style messages to Gemini format
             if let Ok(msgs) = serde_json::from_str::<Vec<serde_json::Value>>(&messages_json) {
-                let mut parts = Vec::new();
+                // Build conversation as single text prompt (Gemini's simple format)
+                let mut prompt = String::new();
                 for msg in &msgs {
                     if let Some(content) = msg["content"].as_str() {
                         let role = msg["role"].as_str().unwrap_or("user");
-                        if role != "system" || parts.is_empty() {
-                            parts.push(serde_json::json!({"text": content}));
+                        match role {
+                            "system" => prompt.push_str(&format!("Instructions: {}\n\n", content)),
+                            "user" => prompt.push_str(&format!("User: {}\n", content)),
+                            "assistant" => prompt.push_str(&format!("Assistant: {}\n", content)),
+                            _ => {}
                         }
                     }
                 }
-                let body = serde_json::json!({"contents": [{"parts": parts}]});
-                let tmp = "/tmp/lens_chat_body.json";
-                let _ = std::fs::write(tmp, body.to_string());
+                prompt.push_str("Assistant:");
 
-                for gmodel in &["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"] {
+                let body = serde_json::json!({"contents": [{"parts": [{"text": prompt}]}]});
+                let _ = std::fs::write("/tmp/lens_chat_body.json", body.to_string());
+
+                for gmodel in &["gemini-2.5-flash", "gemini-2.0-flash-lite"] {
                     let url = format!(
                         "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
                         gmodel, gemini_key
                     );
                     let out = std::process::Command::new("curl")
-                        .args(["-s", "-m", "12", &url, "-H", "Content-Type: application/json", "-d", &format!("@{}", tmp)])
+                        .args(["-s", "-m", "12", &url, "-H", "Content-Type: application/json", "-d", "@/tmp/lens_chat_body.json"])
                         .output();
                     if let Ok(o) = out {
                         if let Ok(p) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
                             if let Some(text) = p["candidates"][0]["content"]["parts"][0]["text"].as_str() {
                                 if !text.is_empty() {
-                                    let _ = std::fs::remove_file(tmp);
+                                    let _ = std::fs::remove_file("/tmp/lens_chat_body.json");
                                     return text.to_string();
                                 }
                             }
                         }
                     }
                 }
-                let _ = std::fs::remove_file(tmp);
+                let _ = std::fs::remove_file("/tmp/lens_chat_body.json");
             }
         }
 
@@ -211,47 +215,45 @@ async fn ollama_chat(model: String, messages_json: String, gemini_key: String) -
 #[tauri::command]
 async fn analyze_image(prompt: String, image_base64: String, gemini_key: String) -> Result<String, String> {
     let result = tokio::task::spawn_blocking(move || {
-        if !gemini_key.is_empty() {
-            // Write request body to temp file (base64 is too large for command line)
-            let full_prompt = format!("{} — Answer in 2-3 short sentences max. Be concise, no bullet points or lists.", prompt);
-            let body = serde_json::json!({
-                "contents": [{"parts": [
-                    {"text": full_prompt},
-                    {"inline_data": {"mime_type": "image/png", "data": image_base64}}
-                ]}]
-            });
-            let tmp_body = "/tmp/lens_gemini_body.json";
-            let _ = std::fs::write(tmp_body, body.to_string());
+        if gemini_key.is_empty() {
+            return "Add a Gemini API key in Settings for image analysis (free at aistudio.google.com/apikey)".to_string();
+        }
 
-            for model in &["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"] {
-                let url = format!(
-                    "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-                    model, gemini_key
-                );
-                let out = std::process::Command::new("curl")
-                    .args(["-s", "-m", "30", &url,
-                           "-H", "Content-Type: application/json",
-                           "-d", &format!("@{}", tmp_body)])
-                    .output();
-                if let Ok(o) = out {
-                    if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                        if let Some(text) = parsed["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                            if !text.is_empty() {
-                                let _ = std::fs::remove_file(tmp_body);
-                                return text.to_string();
-                            }
+        // Build Gemini request body and write to file
+        let body = format!(
+            r#"{{"contents":[{{"parts":[{{"text":"{} — Answer in 2-3 short sentences. Be concise."}},{{"inline_data":{{"mime_type":"image/png","data":"{}"}}}}]}}]}}"#,
+            prompt.replace('"', "'"),
+            image_base64
+        );
+        let _ = std::fs::write("/tmp/lens_img_body.json", &body);
+
+        for model in &["gemini-2.5-flash", "gemini-2.0-flash-lite"] {
+            let url = format!(
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                model, gemini_key
+            );
+            let out = std::process::Command::new("curl")
+                .args(["-s", "-m", "20", &url, "-H", "Content-Type: application/json", "-d", "@/tmp/lens_img_body.json"])
+                .output();
+            if let Ok(o) = out {
+                let stdout = String::from_utf8_lossy(&o.stdout);
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                    if let Some(text) = parsed["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                        if !text.is_empty() {
+                            let _ = std::fs::remove_file("/tmp/lens_img_body.json");
+                            return text.to_string();
                         }
+                    }
+                    if let Some(err) = parsed["error"]["message"].as_str() {
+                        if err.contains("quota") || err.contains("demand") { continue; }
+                        let _ = std::fs::remove_file("/tmp/lens_img_body.json");
+                        return format!("Gemini error: {}", &err[..err.len().min(100)]);
                     }
                 }
             }
-            let _ = std::fs::remove_file(tmp_body);
         }
-
-        // Gemini failed — return quick error, don't try slow OCR+Ollama
-        if !gemini_key.is_empty() {
-            return "Gemini API quota exceeded — resets tomorrow. Try again later or use a different Gemini API key.".to_string();
-        }
-        "Add a Gemini API key in Settings for image analysis (free at aistudio.google.com/apikey)".to_string()
+        let _ = std::fs::remove_file("/tmp/lens_img_body.json");
+        "Gemini quota exhausted — try again later.".to_string()
     }).await.map_err(|e| e.to_string())?;
     Ok(result)
 }
