@@ -4,7 +4,7 @@ import hljs from "highlight.js";
 import { tryInstantResponse, pickModel, summarizeConversation, extractMemoriesFromText, isGoodResponse } from "./brain";
 
 // ── Types ──
-interface Message { role: string; content: string; image?: string; id: string; }
+interface Message { role: string; content: string; image?: string; id: string; internal?: boolean; }
 interface Conversation { id: string; title: string; created: string; messages: Message[]; pinned?: boolean; branches?: Record<string, Message[]>; }
 interface PromptTemplate { name: string; prompt: string; }
 
@@ -256,8 +256,8 @@ async function retryLast() {
   if (tools.length > 0) {
     const results: string[] = [];
     for (const c of tools) results.push(`[${c.name}]: ${(await runTool(c.name, c.args)).slice(0, 500)}`);
-    messages.push({ role: "assistant", content: response, id: uid() });
-    messages.push({ role: "user", content: `[results] ${results.join("\n").slice(0, 1000)}\nSummarize.`, id: uid() });
+    messages.push({ role: "assistant", content: response, id: uid(), internal: true });
+    messages.push({ role: "user", content: `[results] ${results.join("\n").slice(0, 1000)}\nSummarize.`, id: uid(), internal: true });
     final = await callLLM();
   }
   messages.push({ role: "assistant", content: stripToolTokens(final) || final, id: uid() });
@@ -365,7 +365,7 @@ function renderWelcome(): string {
 }
 
 function renderChat(): string {
-  const msgs = messages.filter(m => m.role !== "system").map(m => {
+  const msgs = messages.filter(m => m.role !== "system" && !m.internal).map(m => {
     const cls = m.role === "user" ? "user" : "lens";
     const label = m.role === "user" ? "YOU" : "LENS";
     const c = m.role === "user" ? m.content : stripToolTokens(m.content);
@@ -646,8 +646,8 @@ async function sendAndRender(text: string) {
   if (tools.length > 0) {
     const results: string[] = [];
     for (const c of tools) results.push(`[${c.name}]: ${(await runTool(c.name, c.args)).slice(0, 500)}`);
-    messages.push({ role: "assistant", content: response, id: uid() });
-    messages.push({ role: "user", content: `[results] ${results.join("\n").slice(0, 1000)}\nSummarize.`, id: uid() });
+    messages.push({ role: "assistant", content: response, id: uid(), internal: true });
+    messages.push({ role: "user", content: `[results] ${results.join("\n").slice(0, 1000)}\nSummarize.`, id: uid(), internal: true });
     final = await callLLM();
   }
   messages.push({ role: "assistant", content: stripToolTokens(final) || final, id: uid() });
