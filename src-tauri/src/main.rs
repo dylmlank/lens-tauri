@@ -171,25 +171,69 @@ async fn ollama_chat(model: String, messages_json: String) -> Result<String, Str
 #[tauri::command]
 async fn analyze_image(prompt: String, image_base64: String) -> Result<String, String> {
     let result = tokio::task::spawn_blocking(move || {
-        for model in &["minicpm-v", "llama3.2-vision"] {
+        // Save image to temp file
+        let tmp_img = "/tmp/lens_analyze.png";
+        let tmp_txt = "/tmp/lens_ocr.txt";
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&image_base64) {
+            let _ = std::fs::write(tmp_img, &bytes);
+        } else {
+            return "Error: invalid image data".to_string();
+        }
+
+        // OCR with tesseract (fast, reliable)
+        let ocr = std::process::Command::new("tesseract")
+            .args([tmp_img, "/tmp/lens_ocr", "-l", "eng"])
+            .output();
+
+        let extracted_text = if let Ok(_) = ocr {
+            std::fs::read_to_string(tmp_txt).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Clean up
+        let _ = std::fs::remove_file(tmp_img);
+        let _ = std::fs::remove_file(tmp_txt);
+
+        if extracted_text.trim().is_empty() {
+            // No text found — describe as "an image with no readable text"
             let body = serde_json::json!({
-                "model": model,
-                "messages": [{"role": "user", "content": prompt, "images": [image_base64]}],
+                "model": "llama3.2",
+                "messages": [{"role": "user", "content": format!("{}\n\n(The user shared an image but no text was detected in it. Acknowledge you received an image and ask what they'd like to know about it.)", prompt)}],
                 "stream": false
             });
             let out = std::process::Command::new("curl")
-                .args(["-s", "-m", "120", "http://localhost:11434/api/chat",
+                .args(["-s", "-m", "30", "http://localhost:11434/api/chat",
                        "-H", "Content-Type: application/json", "-d", &body.to_string()])
                 .output();
             if let Ok(o) = out {
                 if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
                     if let Some(content) = parsed["message"]["content"].as_str() {
-                        if !content.is_empty() { return content.to_string(); }
+                        return content.to_string();
                     }
                 }
             }
+            return "I received your image but couldn't extract any text from it. Could you describe what's in it?".to_string();
         }
-        "Couldn't analyze — vision models loading. Try again in a minute.".to_string()
+
+        // Send OCR text to llama3.2 for analysis
+        let body = serde_json::json!({
+            "model": "llama3.2",
+            "messages": [{"role": "user", "content": format!("{}\n\nText extracted from the image:\n{}", prompt, &extracted_text[..extracted_text.len().min(2000)])}],
+            "stream": false
+        });
+        let out = std::process::Command::new("curl")
+            .args(["-s", "-m", "30", "http://localhost:11434/api/chat",
+                   "-H", "Content-Type: application/json", "-d", &body.to_string()])
+            .output();
+        if let Ok(o) = out {
+            if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                if let Some(content) = parsed["message"]["content"].as_str() {
+                    return content.to_string();
+                }
+            }
+        }
+        format!("I extracted this text from your image:\n\n{}", &extracted_text[..extracted_text.len().min(500)])
     }).await.map_err(|e| e.to_string())?;
     Ok(result)
 }
