@@ -145,53 +145,53 @@ fn write_vault_note(path: String, content: String) -> String {
 }
 
 #[tauri::command]
-fn ollama_chat(model: String, messages_json: String) -> String {
-    let out = std::process::Command::new("curl")
-        .args(["-s", "-m", "30", "http://localhost:11434/api/chat",
-               "-H", "Content-Type: application/json",
-               "-d", &format!(r#"{{"model":"{}","messages":{},"stream":false}}"#, model, messages_json)])
-        .output();
-
-    match out {
-        Ok(o) => {
-            if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                if let Some(content) = parsed["message"]["content"].as_str() {
-                    return content.to_string();
+async fn ollama_chat(model: String, messages_json: String) -> Result<String, String> {
+    // Run in async to avoid blocking Tauri's main thread
+    let result = tokio::task::spawn_blocking(move || {
+        let body = format!(r#"{{"model":"{}","messages":{},"stream":false}}"#, model, messages_json);
+        let out = std::process::Command::new("curl")
+            .args(["-s", "-m", "30", "http://localhost:11434/api/chat",
+                   "-H", "Content-Type: application/json", "-d", &body])
+            .output();
+        match out {
+            Ok(o) => {
+                if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                    if let Some(content) = parsed["message"]["content"].as_str() {
+                        return content.to_string();
+                    }
                 }
+                String::from_utf8_lossy(&o.stdout).to_string()
             }
-            String::from_utf8_lossy(&o.stdout).to_string()
+            Err(e) => format!("Error: {}", e),
         }
-        Err(e) => format!("Error: {}", e),
-    }
+    }).await.map_err(|e| e.to_string())?;
+    Ok(result)
 }
 
 #[tauri::command]
-fn analyze_image(prompt: String, image_base64: String) -> String {
-    // Try vision models via Ollama — Rust handles the long timeout
-    for model in &["moondream", "minicpm-v", "llama3.2-vision"] {
-        let body = serde_json::json!({
-            "model": model,
-            "messages": [{"role": "user", "content": prompt, "images": [image_base64]}],
-            "stream": false
-        });
-
-        let client = std::process::Command::new("curl")
-            .args(["-s", "-m", "120", "http://localhost:11434/api/chat",
-                   "-H", "Content-Type: application/json",
-                   "-d", &body.to_string()])
-            .output();
-
-        if let Ok(out) = client {
-            if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                if let Some(content) = parsed["message"]["content"].as_str() {
-                    if !content.is_empty() {
-                        return content.to_string();
+async fn analyze_image(prompt: String, image_base64: String) -> Result<String, String> {
+    let result = tokio::task::spawn_blocking(move || {
+        for model in &["moondream", "minicpm-v", "llama3.2-vision"] {
+            let body = serde_json::json!({
+                "model": model,
+                "messages": [{"role": "user", "content": prompt, "images": [image_base64]}],
+                "stream": false
+            });
+            let out = std::process::Command::new("curl")
+                .args(["-s", "-m", "120", "http://localhost:11434/api/chat",
+                       "-H", "Content-Type: application/json", "-d", &body.to_string()])
+                .output();
+            if let Ok(o) = out {
+                if let Ok(parsed) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                    if let Some(content) = parsed["message"]["content"].as_str() {
+                        if !content.is_empty() { return content.to_string(); }
                     }
                 }
             }
         }
-    }
-    "Couldn't analyze — vision models are loading. Try again in a minute.".to_string()
+        "Couldn't analyze — vision models loading. Try again in a minute.".to_string()
+    }).await.map_err(|e| e.to_string())?;
+    Ok(result)
 }
 
 fn main() {

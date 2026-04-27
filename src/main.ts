@@ -643,7 +643,13 @@ async function sendAndRender(text: string) {
 }
 
 async function sendImageMessage(text: string, img: string) {
-  // Use Rust backend — handles long timeouts properly
+  // Show loading in chat
+  const ca = document.querySelector(".chat-area");
+  if (ca) {
+    ca.innerHTML += '<div class="thinking"><div class="skeleton"></div><div class="skeleton short"></div><div style="color:var(--muted);font-size:12px;margin-top:4px">Analyzing image (this may take a moment)...</div></div>';
+    ca.scrollTop = ca.scrollHeight;
+  }
+
   let response = "";
   try {
     response = await invoke<string>("analyze_image", { prompt: text, imageBase64: img });
@@ -651,7 +657,7 @@ async function sendImageMessage(text: string, img: string) {
     response = `Error analyzing image: ${e}`;
   }
 
-  messages.push({ role: "assistant", content: response, id: uid() });
+  messages.push({ role: "assistant", content: response || "Couldn't analyze the image.", id: uid() });
   isLoading = false; saveConvo(); render();
 }
 
