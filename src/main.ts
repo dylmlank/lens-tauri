@@ -610,7 +610,17 @@ async function handleDrop(e: DragEvent) { e.preventDefault(); const f = e.dataTr
 function doSend() {
   const ta = document.getElementById("chat-input") as HTMLTextAreaElement;
   let text = ta?.value?.trim(); if (!text && !pendingImage) return; if (isLoading) return;
-  if (pendingImage) { text = text || "What's in this image?"; messages.push({ role: "user", content: text, image: pendingImage, id: uid() }); pendingImage = null; ta.value = ""; isLoading = true; render(); sendImageMessage(text, messages[messages.length - 1].image!); return; }
+  if (pendingImage) {
+    text = text || "What's in this image?";
+    const imgData = pendingImage; // Capture before clearing
+    messages.push({ role: "user", content: text, image: imgData, id: uid() });
+    pendingImage = null;
+    ta.value = "";
+    isLoading = true;
+    render();
+    sendImageMessage(text, imgData); // Pass directly, not from messages
+    return;
+  }
   ta.value = ""; sendAndRender(text);
 }
 

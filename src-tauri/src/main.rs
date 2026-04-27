@@ -171,7 +171,7 @@ async fn ollama_chat(model: String, messages_json: String) -> Result<String, Str
 #[tauri::command]
 async fn analyze_image(prompt: String, image_base64: String) -> Result<String, String> {
     let result = tokio::task::spawn_blocking(move || {
-        for model in &["moondream", "minicpm-v", "llama3.2-vision"] {
+        for model in &["minicpm-v", "llama3.2-vision"] {
             let body = serde_json::json!({
                 "model": model,
                 "messages": [{"role": "user", "content": prompt, "images": [image_base64]}],
