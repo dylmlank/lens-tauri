@@ -216,44 +216,56 @@ async fn ollama_chat(model: String, messages_json: String, gemini_key: String) -
 async fn analyze_image(prompt: String, image_base64: String, gemini_key: String) -> Result<String, String> {
     let result = tokio::task::spawn_blocking(move || {
         if gemini_key.is_empty() {
-            return "Add a Gemini API key in Settings for image analysis (free at aistudio.google.com/apikey)".to_string();
+            return "Add a Gemini API key in Settings (free at aistudio.google.com/apikey)".to_string();
         }
 
-        // Build Gemini request body and write to file
-        let body = format!(
-            r#"{{"contents":[{{"parts":[{{"text":"{} — Answer in 2-3 short sentences. Be concise."}},{{"inline_data":{{"mime_type":"image/png","data":"{}"}}}}]}}]}}"#,
-            prompt.replace('"', "'"),
-            image_base64
-        );
-        let _ = std::fs::write("/tmp/lens_img_body.json", &body);
+        // Use serde_json to build body properly (handles all escaping)
+        let body = serde_json::json!({
+            "contents": [{
+                "parts": [
+                    {"text": format!("{} — 2-3 sentences max, concise.", prompt)},
+                    {"inline_data": {"mime_type": "image/png", "data": &image_base64}}
+                ]
+            }]
+        });
 
+        // Write body to file
+        match std::fs::write("/tmp/lens_img.json", serde_json::to_string(&body).unwrap_or_default()) {
+            Ok(_) => {},
+            Err(e) => return format!("Error writing temp file: {}", e),
+        }
+
+        // Try Gemini models
         for model in &["gemini-2.5-flash", "gemini-2.0-flash-lite"] {
             let url = format!(
                 "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
                 model, gemini_key
             );
             let out = std::process::Command::new("curl")
-                .args(["-s", "-m", "20", &url, "-H", "Content-Type: application/json", "-d", "@/tmp/lens_img_body.json"])
+                .args(["-s", "-m", "20", "-X", "POST", &url,
+                       "-H", "Content-Type: application/json",
+                       "--data-binary", "@/tmp/lens_img.json"])
                 .output();
             if let Ok(o) = out {
-                let stdout = String::from_utf8_lossy(&o.stdout);
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&stdout) {
-                    if let Some(text) = parsed["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                        if !text.is_empty() {
-                            let _ = std::fs::remove_file("/tmp/lens_img_body.json");
-                            return text.to_string();
+                if let Ok(p) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                    if let Some(t) = p["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                        if !t.is_empty() {
+                            let _ = std::fs::remove_file("/tmp/lens_img.json");
+                            return t.to_string();
                         }
                     }
-                    if let Some(err) = parsed["error"]["message"].as_str() {
-                        if err.contains("quota") || err.contains("demand") { continue; }
-                        let _ = std::fs::remove_file("/tmp/lens_img_body.json");
-                        return format!("Gemini error: {}", &err[..err.len().min(100)]);
+                    // Log error for debugging
+                    if let Some(e) = p["error"]["message"].as_str() {
+                        if !e.contains("quota") && !e.contains("demand") {
+                            let _ = std::fs::remove_file("/tmp/lens_img.json");
+                            return format!("Gemini: {}", &e[..e.len().min(80)]);
+                        }
                     }
                 }
             }
         }
-        let _ = std::fs::remove_file("/tmp/lens_img_body.json");
-        "Gemini quota exhausted — try again later.".to_string()
+        let _ = std::fs::remove_file("/tmp/lens_img.json");
+        "All Gemini models busy. Try again in a minute.".to_string()
     }).await.map_err(|e| e.to_string())?;
     Ok(result)
 }
