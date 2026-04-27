@@ -182,9 +182,11 @@ async fn analyze_image(prompt: String, image_base64: String, gemini_key: String)
                 }]
             });
 
+            // Try multiple Gemini models (2.0-flash may hit quota, 2.5-flash has separate quota)
+            for gemini_model in &["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"] {
             let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={}",
-                gemini_key
+                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                gemini_model, gemini_key
             );
 
             let out = std::process::Command::new("curl")
@@ -201,6 +203,7 @@ async fn analyze_image(prompt: String, image_base64: String, gemini_key: String)
                     }
                 }
             }
+            } // end for gemini_model
         }
 
         // Fallback: OCR + text model
