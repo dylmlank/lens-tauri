@@ -206,22 +206,11 @@ async fn analyze_image(prompt: String, image_base64: String, gemini_key: String)
             let _ = std::fs::remove_file(tmp_body);
         }
 
-        // Fallback: OCR + text model
-        let tmp_img = "/tmp/lens_analyze.png";
-        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&image_base64) {
-            let _ = std::fs::write(tmp_img, &bytes);
-        } else {
-            return "Error: invalid image data".to_string();
+        // Gemini failed — return quick error, don't try slow OCR+Ollama
+        if !gemini_key.is_empty() {
+            return "Gemini API quota exceeded — resets tomorrow. Try again later or use a different Gemini API key.".to_string();
         }
-        let _ = std::process::Command::new("tesseract").args([tmp_img, "/tmp/lens_ocr", "-l", "eng"]).output();
-        let text = std::fs::read_to_string("/tmp/lens_ocr.txt").unwrap_or_default();
-        let _ = std::fs::remove_file(tmp_img);
-        let _ = std::fs::remove_file("/tmp/lens_ocr.txt");
-
-        if text.trim().is_empty() {
-            return "Add a Gemini API key in Settings for full image analysis (free at aistudio.google.com/apikey)".to_string();
-        }
-        format!("Text from image: {}", &text[..text.len().min(500)])
+        "Add a Gemini API key in Settings for image analysis (free at aistudio.google.com/apikey)".to_string()
     }).await.map_err(|e| e.to_string())?;
     Ok(result)
 }
