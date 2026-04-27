@@ -1,10 +1,10 @@
 // Lens v2 — Tauri + Bun rewrite
-import { invoke } from "@tauri-apps/api/core";
 
 // ── State ──
 let messages: { role: string; content: string }[] = [];
 let voiceMode = false;
 let currentTab = "chat";
+let isLoading = false;
 
 // ── Config ──
 const CONFIG = {
@@ -12,14 +12,14 @@ const CONFIG = {
   model: "minimax/minimax-m2.5:free",
   systemPrompt:
     "You are Lens, a witty AI assistant. Be concise. Use emoji. Use markdown.\n" +
-    "Tools: [TOOL:run_command command=...] [TOOL:speak text=...] [TOOL:read_file path=...]\n" +
     "Never ask permission. Just do it.",
 };
 
-// Load config from localStorage
 function loadConfig() {
-  const saved = localStorage.getItem("lens-config");
-  if (saved) Object.assign(CONFIG, JSON.parse(saved));
+  try {
+    const saved = localStorage.getItem("lens-config");
+    if (saved) Object.assign(CONFIG, JSON.parse(saved));
+  } catch {}
 }
 
 function saveConfig() {
@@ -27,25 +27,22 @@ function saveConfig() {
 }
 
 // ── API ──
-async function callLLM(): Promise<string> {
-  const body = {
-    model: CONFIG.model,
-    messages: [
-      { role: "system", content: CONFIG.systemPrompt },
-      ...messages.slice(-20),
-    ],
-    stream: false,
-  };
+const MODELS = [
+  "minimax/minimax-m2.5:free",
+  "tencent/hy3-preview:free",
+  "google/gemma-4-26b-a4b-it:free",
+  "inclusionai/ling-2.6-flash:free",
+];
 
-  const fallbackModels = [
-    CONFIG.model,
-    "minimax/minimax-m2.5:free",
-    "tencent/hy3-preview:free",
-    "google/gemma-4-26b-a4b-it:free",
-    "inclusionai/ling-2.6-flash:free",
+async function callLLM(): Promise<string> {
+  const apiMessages = [
+    { role: "system", content: CONFIG.systemPrompt },
+    ...messages.slice(-20),
   ];
 
-  for (const model of fallbackModels) {
+  const models = [CONFIG.model, ...MODELS.filter(m => m !== CONFIG.model)];
+
+  for (const model of models) {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 12000);
@@ -56,11 +53,15 @@ async function callLLM(): Promise<string> {
           "Authorization": `Bearer ${CONFIG.apiKey}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ ...body, model }),
+        body: JSON.stringify({ model, messages: apiMessages, stream: false }),
         signal: controller.signal,
       });
 
       clearTimeout(timer);
+
+      if (resp.status === 401) {
+        return "Invalid API key. Go to Settings to update it.";
+      }
       if (!resp.ok) continue;
 
       const data = await resp.json();
@@ -71,40 +72,26 @@ async function callLLM(): Promise<string> {
     }
   }
 
-  return "All models are busy right now. Try again in a moment.";
+  return "All models are busy. Try again in a moment.";
 }
 
 // ── Markdown ──
 function md(text: string): string {
-  let s = text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  let s = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-  // Code blocks
   s = s.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) =>
-    `<pre><code>${lang ? `<span class="lang">${lang}</span>\n` : ""}${code.trim()}</code></pre>`
+    `<pre><code>${lang ? `<span style="color:var(--text-muted);font-size:11px">${lang}</span>\n` : ""}${code.trim()}</code></pre>`
   );
-
-  // Inline code
   s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
-
-  // Bold + italic
   s = s.replace(/\*\*\*(.+?)\*\*\*/g, "<strong><em>$1</em></strong>");
   s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   s = s.replace(/(?<!\w)\*(.+?)\*(?!\w)/g, "<em>$1</em>");
-
-  // Headings
   s = s.replace(/^#### (.+)$/gm, '<strong style="font-size:14px">$1</strong>');
   s = s.replace(/^### (.+)$/gm, '<strong style="font-size:15px">$1</strong>');
   s = s.replace(/^## (.+)$/gm, '<strong style="font-size:16px">$1</strong>');
   s = s.replace(/^# (.+)$/gm, '<strong style="font-size:18px">$1</strong>');
-
-  // Lists
   s = s.replace(/^[-*] (.+)$/gm, "&nbsp;&nbsp;• $1");
   s = s.replace(/^(\d+)\. (.+)$/gm, "&nbsp;&nbsp;$1. $2");
-
-  // Line breaks
   s = s.replace(/\n/g, "<br>");
 
   return s;
@@ -113,13 +100,23 @@ function md(text: string): string {
 // ── Render ──
 function render() {
   const app = document.getElementById("app")!;
+
+  // Show setup screen if no API key
+  if (!CONFIG.apiKey) {
+    app.innerHTML = renderSetup();
+    return;
+  }
+
+  const tabs = ["Chat", "Memory", "Tools", "History"];
+
   app.innerHTML = `
     <div class="tab-bar">
-      ${["Chat", "Memory", "Tools", "History"].map(
-        (t) =>
-          `<div class="tab ${currentTab === t.toLowerCase() ? "active" : ""}"
-               onclick="window.switchTab('${t.toLowerCase()}')">${t}</div>`
+      ${tabs.map(t =>
+        `<div class="tab ${currentTab === t.toLowerCase() ? "active" : ""}"
+             onclick="switchTab('${t.toLowerCase()}')">${t}</div>`
       ).join("")}
+      <div style="flex:1"></div>
+      <div class="tab" onclick="showSettings()">Settings</div>
     </div>
 
     <div class="tab-content ${currentTab === "chat" ? "active" : ""}" id="tab-chat">
@@ -127,43 +124,55 @@ function render() {
     </div>
 
     <div class="tab-content ${currentTab === "memory" ? "active" : ""}" id="tab-memory">
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title" style="color: #fbbf24">Memory</div>
-        </div>
-        <div class="panel-empty">Memories will appear here as you chat.</div>
-      </div>
+      <div class="panel"><div class="panel-header"><div class="panel-title" style="color:#fbbf24">Memory</div></div>
+      <div class="panel-empty">Memories will appear here as you chat.</div></div>
     </div>
 
     <div class="tab-content ${currentTab === "tools" ? "active" : ""}" id="tab-tools">
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title" style="color: #22c55e">Tools</div>
-        </div>
-        ${renderTools()}
-      </div>
+      <div class="panel"><div class="panel-header"><div class="panel-title" style="color:#22c55e">Tools</div></div>
+      ${renderTools()}</div>
     </div>
 
     <div class="tab-content ${currentTab === "history" ? "active" : ""}" id="tab-history">
-      <div class="panel">
-        <div class="panel-header">
-          <div class="panel-title" style="color: #ec4899">History</div>
-        </div>
-        <div class="panel-empty">Past conversations will appear here.</div>
-      </div>
+      <div class="panel"><div class="panel-header"><div class="panel-title" style="color:#ec4899">History</div></div>
+      <div class="panel-empty">Past conversations will appear here.</div></div>
     </div>
 
     ${currentTab === "chat" ? renderInputBar() : ""}
-    <div class="model-bar">${CONFIG.model}</div>
+    <div class="model-bar">${CONFIG.model}${isLoading ? " • Working on it..." : ""}</div>
   `;
 
-  // Scroll chat to bottom
   const chatArea = document.querySelector(".chat-area");
   if (chatArea) chatArea.scrollTop = chatArea.scrollHeight;
 
-  // Focus input
   const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
-  if (textarea) textarea.focus();
+  if (textarea && !isLoading) textarea.focus();
+}
+
+function renderSetup(): string {
+  return `
+    <div class="welcome">
+      <div class="welcome-orb"></div>
+      <div class="welcome-orb"></div>
+      <div class="welcome-orb"></div>
+      <div class="welcome-logo">Lens</div>
+      <div class="welcome-sub">Enter your OpenRouter API key to get started</div>
+      <div class="welcome-sub" style="font-size:12px;margin-top:-8px">
+        <a href="https://openrouter.ai/keys" style="color:var(--purple)" target="_blank">Get a free key at openrouter.ai/keys</a>
+      </div>
+      <div style="z-index:1;display:flex;gap:10px;margin-top:16px">
+        <input type="password" id="api-key-input" placeholder="sk-or-v1-..."
+               style="width:350px;padding:12px 18px;border-radius:12px;border:2px solid var(--border);
+                      background:var(--surface);color:var(--text);font-size:14px;outline:none"
+               onkeydown="if(event.key==='Enter')saveApiKey()">
+        <button onclick="saveApiKey()"
+                style="padding:12px 24px;border-radius:12px;border:none;background:var(--gradient-1);
+                       color:white;font-weight:700;font-size:14px;cursor:pointer">
+          Start
+        </button>
+      </div>
+    </div>
+  `;
 }
 
 function renderWelcome(): string {
@@ -175,39 +184,37 @@ function renderWelcome(): string {
       <div class="welcome-logo">Lens</div>
       <div class="welcome-sub">Hey, what are we building today?</div>
       <div class="suggestions">
-        <div class="suggestion" onclick="window.sendSuggestion('What\\'s on my screen?')">What's on my screen?</div>
-        <div class="suggestion" onclick="window.sendSuggestion('Build something cool')">Build something cool</div>
-        <div class="suggestion" onclick="window.sendSuggestion('Search the web for me')">Search the web</div>
-        <div class="suggestion" onclick="window.sendSuggestion('Help me with code')">Help me with code</div>
+        <div class="suggestion" onclick="sendSuggestion('What can you do?')">What can you do?</div>
+        <div class="suggestion" onclick="sendSuggestion('Build something cool')">Build something cool</div>
+        <div class="suggestion" onclick="sendSuggestion('Search the web for me')">Search the web</div>
+        <div class="suggestion" onclick="sendSuggestion('Help me with code')">Help me with code</div>
       </div>
     </div>
   `;
 }
 
 function renderChat(): string {
-  const msgs = messages
-    .filter((m) => m.role !== "system")
-    .map((m) => {
-      const role = m.role === "user" ? "user" : "lens";
+  const html = messages
+    .filter(m => m.role !== "system")
+    .map(m => {
+      const cls = m.role === "user" ? "user" : "lens";
       const label = m.role === "user" ? "YOU" : "LENS";
-      const body = m.role === "user" ? m.content.replace(/</g, "&lt;") : md(m.content);
-      return `<div class="message ${role}"><div class="role">${label}</div><div class="body">${body}</div></div>`;
+      const body = m.role === "user" ? m.content.replace(/</g, "&lt;").replace(/\n/g, "<br>") : md(m.content);
+      return `<div class="message ${cls}"><div class="role">${label}</div><div class="body">${body}</div></div>`;
     })
     .join("");
 
-  return `<div class="chat-area">${msgs}</div>`;
+  return `<div class="chat-area">${html}${isLoading ? '<div class="thinking">Working on it...</div>' : ''}</div>`;
 }
 
 function renderInputBar(): string {
   return `
     <div class="input-bar">
-      <button class="btn-icon btn-capture" onclick="window.capture()">Capture</button>
       <button class="btn-icon btn-voice ${voiceMode ? "active" : ""}"
-              onclick="window.toggleVoice()">${voiceMode ? "Voice ON" : "Voice"}</button>
-      <textarea placeholder="Message Lens..."
-                onkeydown="window.handleKey(event)"
-                oninput="this.style.height='48px';this.style.height=this.scrollHeight+'px'"></textarea>
-      <button class="btn-send" onclick="window.sendMessage()">Send</button>
+              onclick="toggleVoice()">${voiceMode ? "Voice ON" : "Voice"}</button>
+      <textarea placeholder="Message Lens..." ${isLoading ? "disabled" : ""}
+                onkeydown="handleKey(event)"></textarea>
+      <button class="btn-send" onclick="sendMessage()" ${isLoading ? "disabled" : ""}>Send</button>
     </div>
   `;
 }
@@ -215,30 +222,42 @@ function renderInputBar(): string {
 function renderTools(): string {
   const tools = [
     "run_command", "read_file", "write_file", "list_files", "web_search",
-    "web_fetch", "speak", "voice_input", "screenshot", "git",
-    "clipboard", "notify", "calc", "datetime", "search_files",
+    "speak", "voice_input", "screenshot", "git", "clipboard", "calc", "datetime",
   ];
-  return tools
-    .map((t) => `<div class="card"><div class="card-title" style="color:#22c55e">${t}</div></div>`)
-    .join("");
+  return tools.map(t => `<div class="card"><div class="card-title" style="color:#22c55e">${t}</div></div>`).join("");
 }
 
-// ── Actions ──
-(window as any).switchTab = (tab: string) => {
-  currentTab = tab;
-  render();
+// ── Global Actions ──
+(window as any).switchTab = (tab: string) => { currentTab = tab; render(); };
+(window as any).toggleVoice = () => { voiceMode = !voiceMode; render(); };
+
+(window as any).saveApiKey = () => {
+  const input = document.getElementById("api-key-input") as HTMLInputElement;
+  const key = input?.value?.trim();
+  if (key) {
+    CONFIG.apiKey = key;
+    saveConfig();
+    render();
+  }
 };
 
-(window as any).sendSuggestion = async (text: string) => {
-  await sendAndRender(text);
+(window as any).showSettings = () => {
+  const key = prompt("OpenRouter API Key:", CONFIG.apiKey);
+  if (key !== null) {
+    CONFIG.apiKey = key;
+    saveConfig();
+    render();
+  }
 };
 
-(window as any).sendMessage = async () => {
+(window as any).sendSuggestion = (text: string) => sendAndRender(text);
+
+(window as any).sendMessage = () => {
   const textarea = document.querySelector("textarea") as HTMLTextAreaElement;
   const text = textarea?.value?.trim();
-  if (!text) return;
+  if (!text || isLoading) return;
   textarea.value = "";
-  await sendAndRender(text);
+  sendAndRender(text);
 };
 
 (window as any).handleKey = (e: KeyboardEvent) => {
@@ -248,45 +267,20 @@ function renderTools(): string {
   }
 };
 
-(window as any).toggleVoice = () => {
-  voiceMode = !voiceMode;
-  render();
-};
-
-(window as any).capture = () => {
-  sendAndRender("What's on my screen?");
-};
-
 async function sendAndRender(text: string) {
-  // Add user message and show it
+  if (isLoading) return;
+
   messages.push({ role: "user", content: text });
+  isLoading = true;
   render();
 
-  // Show thinking indicator
-  const chatArea = document.querySelector(".chat-area");
-  if (chatArea) {
-    chatArea.innerHTML += '<div class="thinking">Working on it...</div>';
-    chatArea.scrollTop = chatArea.scrollHeight;
-  }
-
-  // Call LLM (messages already has the user msg)
   const response = await callLLM();
 
-  // Add assistant response
   messages.push({ role: "assistant", content: response });
+  isLoading = false;
   render();
 }
 
 // ── Init ──
 loadConfig();
-
-// First-run: ask for API key
-if (!CONFIG.apiKey) {
-  const key = prompt("Enter your OpenRouter API key (get one free at openrouter.ai/keys):");
-  if (key) {
-    CONFIG.apiKey = key;
-    saveConfig();
-  }
-}
-
 render();
