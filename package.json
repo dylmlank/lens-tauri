@@ -1,0 +1,17 @@
+{
+  "name": "lens",
+  "version": "2.0.0",
+  "description": "AI chatbot with tools, memory, voice, and screen capture",
+  "scripts": {
+    "dev": "bun run --bun vite",
+    "build": "bun run --bun vite build",
+    "tauri": "cargo tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "vite": "^6"
+  }
+}
