@@ -168,20 +168,24 @@ async fn ollama_chat(model: String, messages_json: String, gemini_key: String) -
                 let body = serde_json::json!({"contents": [{"parts": [{"text": prompt}]}]});
                 let _ = std::fs::write("/tmp/lens_chat_body.json", body.to_string());
 
-                for gmodel in &["gemini-2.5-flash", "gemini-2.0-flash-lite"] {
-                    let url = format!(
-                        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-                        gmodel, gemini_key
-                    );
-                    let out = std::process::Command::new("curl")
-                        .args(["-s", "-m", "12", &url, "-H", "Content-Type: application/json", "-d", "@/tmp/lens_chat_body.json"])
-                        .output();
-                    if let Ok(o) = out {
-                        if let Ok(p) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                            if let Some(text) = p["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                                if !text.is_empty() {
-                                    let _ = std::fs::remove_file("/tmp/lens_chat_body.json");
-                                    return text.to_string();
+                // Try with retries (Gemini rate limits reset in ~5s)
+                for attempt in 0..3 {
+                    if attempt > 0 { std::thread::sleep(std::time::Duration::from_secs(4)); }
+                    for gmodel in &["gemini-2.5-flash", "gemini-2.0-flash-lite"] {
+                        let url = format!(
+                            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                            gmodel, gemini_key
+                        );
+                        let out = std::process::Command::new("curl")
+                            .args(["-s", "-m", "12", &url, "-H", "Content-Type: application/json", "-d", "@/tmp/lens_chat_body.json"])
+                            .output();
+                        if let Ok(o) = out {
+                            if let Ok(p) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                                if let Some(text) = p["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                                    if !text.is_empty() {
+                                        let _ = std::fs::remove_file("/tmp/lens_chat_body.json");
+                                        return text.to_string();
+                                    }
                                 }
                             }
                         }
@@ -236,29 +240,25 @@ async fn analyze_image(prompt: String, image_base64: String, gemini_key: String)
         }
 
         // Try Gemini models
-        for model in &["gemini-2.5-flash", "gemini-2.0-flash-lite"] {
-            let url = format!(
-                "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-                model, gemini_key
-            );
-            let out = std::process::Command::new("curl")
-                .args(["-s", "-m", "20", "-X", "POST", &url,
-                       "-H", "Content-Type: application/json",
-                       "--data-binary", "@/tmp/lens_img.json"])
-                .output();
-            if let Ok(o) = out {
-                if let Ok(p) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
-                    if let Some(t) = p["candidates"][0]["content"]["parts"][0]["text"].as_str() {
-                        if !t.is_empty() {
-                            let _ = std::fs::remove_file("/tmp/lens_img.json");
-                            return t.to_string();
-                        }
-                    }
-                    // Log error for debugging
-                    if let Some(e) = p["error"]["message"].as_str() {
-                        if !e.contains("quota") && !e.contains("demand") {
-                            let _ = std::fs::remove_file("/tmp/lens_img.json");
-                            return format!("Gemini: {}", &e[..e.len().min(80)]);
+        for attempt in 0..3 {
+            if attempt > 0 { std::thread::sleep(std::time::Duration::from_secs(4)); }
+            for model in &["gemini-2.5-flash", "gemini-2.0-flash-lite"] {
+                let url = format!(
+                    "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                    model, gemini_key
+                );
+                let out = std::process::Command::new("curl")
+                    .args(["-s", "-m", "20", "-X", "POST", &url,
+                           "-H", "Content-Type: application/json",
+                           "--data-binary", "@/tmp/lens_img.json"])
+                    .output();
+                if let Ok(o) = out {
+                    if let Ok(p) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                        if let Some(t) = p["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                            if !t.is_empty() {
+                                let _ = std::fs::remove_file("/tmp/lens_img.json");
+                                return t.to_string();
+                            }
                         }
                     }
                 }
