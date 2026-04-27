@@ -173,9 +173,10 @@ async fn analyze_image(prompt: String, image_base64: String, gemini_key: String)
     let result = tokio::task::spawn_blocking(move || {
         if !gemini_key.is_empty() {
             // Write request body to temp file (base64 is too large for command line)
+            let full_prompt = format!("{} — Answer in 2-3 short sentences max. Be concise, no bullet points or lists.", prompt);
             let body = serde_json::json!({
                 "contents": [{"parts": [
-                    {"text": prompt},
+                    {"text": full_prompt},
                     {"inline_data": {"mime_type": "image/png", "data": image_base64}}
                 ]}]
             });
