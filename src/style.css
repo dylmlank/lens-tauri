@@ -423,8 +423,9 @@ textarea.panel-input { resize: vertical; min-height: 60px; }
 .remove-img { position: absolute; top: -6px; right: -6px; background: var(--pink); color: white; border: none; border-radius: 50%; width: 18px; height: 18px; font-size: 11px; cursor: pointer; line-height: 16px; }
 
 /* ── Template Bar ── */
-.template-bar { display: flex; gap: 6px; padding: 6px 24px 0; overflow-x: auto; }
-.template-bar::-webkit-scrollbar { height: 0; }
+.template-bar { display: flex; gap: 6px; padding: 8px 24px 4px; overflow-x: auto; min-height: 38px; flex-shrink: 0; border-bottom: 1px solid var(--border); }
+.template-bar::-webkit-scrollbar { height: 4px; }
+.template-bar::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 .template-chip { padding: 5px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg2); color: var(--text-muted); font-size: 11px; cursor: pointer; white-space: nowrap; transition: all 0.15s; }
 .template-chip:hover { border-color: var(--purple); color: var(--text); }
 

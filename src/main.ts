@@ -504,12 +504,68 @@ async function sendAndRender(text: string) {
 }
 
 async function sendImageMessage(text: string, img: string) {
-  const apiMsgs = [{ role: "system", content: CONFIG.systemPrompt }, ...messages.slice(-16).map(m => m.image ? { role: m.role, content: [{ type: "image_url", image_url: { url: `data:image/png;base64,${m.image}` } }, { type: "text", text: m.content }] } : { role: m.role, content: m.content })];
   let response = "";
-  for (const model of ["google/gemma-4-26b-a4b-it:free", ...MODELS]) {
-    try { const r = await fetch("https://openrouter.ai/api/v1/chat/completions", { method: "POST", headers: { "Authorization": `Bearer ${CONFIG.apiKey}`, "Content-Type": "application/json" }, body: JSON.stringify({ model, messages: apiMsgs, stream: false }), signal: AbortSignal.timeout(15000) }); if (!r.ok) continue; const d = await r.json(); response = d.choices?.[0]?.message?.content || ""; if (response) break; } catch { continue; }
+
+  // Try local Ollama vision model first (llama3.2-vision is installed)
+  try {
+    const r = await fetch("http://localhost:11434/api/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        model: "llama3.2-vision",
+        messages: [{ role: "user", content: text, images: [img] }],
+        stream: false,
+      }),
+      signal: AbortSignal.timeout(30000),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      response = d.message?.content || "";
+    }
+  } catch {}
+
+  // Fallback: try minicpm-v (also installed locally)
+  if (!response) {
+    try {
+      const r = await fetch("http://localhost:11434/api/chat", {
+        method: "POST",
+        body: JSON.stringify({
+          model: "minicpm-v",
+          messages: [{ role: "user", content: text, images: [img] }],
+          stream: false,
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        response = d.message?.content || "";
+      }
+    } catch {}
   }
-  messages.push({ role: "assistant", content: response || "Couldn't analyze the image.", id: uid() }); isLoading = false; saveConvo(); render();
+
+  // Last resort: OpenRouter with vision-capable model
+  if (!response && CONFIG.apiKey) {
+    const apiMsgs = [{ role: "user", content: [
+      { type: "image_url", image_url: { url: `data:image/png;base64,${img}` } },
+      { type: "text", text: text }
+    ]}];
+    for (const model of ["google/gemma-4-26b-a4b-it:free", "openrouter/free"]) {
+      try {
+        const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${CONFIG.apiKey}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ model, messages: apiMsgs, stream: false }),
+          signal: AbortSignal.timeout(15000),
+        });
+        if (!r.ok) continue;
+        const d = await r.json();
+        response = d.choices?.[0]?.message?.content || "";
+        if (response) break;
+      } catch { continue; }
+    }
+  }
+
+  messages.push({ role: "assistant", content: response || "Couldn't analyze the image — no vision model available. Make sure Ollama is running with llama3.2-vision.", id: uid() });
+  isLoading = false; saveConvo(); render();
 }
 
 // ── Init ──
