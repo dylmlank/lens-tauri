@@ -145,12 +145,52 @@ fn write_vault_note(path: String, content: String) -> String {
 }
 
 #[tauri::command]
-async fn ollama_chat(model: String, messages_json: String) -> Result<String, String> {
-    // Run in async to avoid blocking Tauri's main thread
+async fn ollama_chat(model: String, messages_json: String, gemini_key: String) -> Result<String, String> {
     let result = tokio::task::spawn_blocking(move || {
+        // Try Gemini first (1-2s) — much faster than Ollama (7s+)
+        if !gemini_key.is_empty() {
+            // Convert OpenAI-style messages to Gemini format
+            if let Ok(msgs) = serde_json::from_str::<Vec<serde_json::Value>>(&messages_json) {
+                let mut parts = Vec::new();
+                for msg in &msgs {
+                    if let Some(content) = msg["content"].as_str() {
+                        let role = msg["role"].as_str().unwrap_or("user");
+                        if role != "system" || parts.is_empty() {
+                            parts.push(serde_json::json!({"text": content}));
+                        }
+                    }
+                }
+                let body = serde_json::json!({"contents": [{"parts": parts}]});
+                let tmp = "/tmp/lens_chat_body.json";
+                let _ = std::fs::write(tmp, body.to_string());
+
+                for gmodel in &["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.0-flash"] {
+                    let url = format!(
+                        "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
+                        gmodel, gemini_key
+                    );
+                    let out = std::process::Command::new("curl")
+                        .args(["-s", "-m", "12", &url, "-H", "Content-Type: application/json", "-d", &format!("@{}", tmp)])
+                        .output();
+                    if let Ok(o) = out {
+                        if let Ok(p) = serde_json::from_slice::<serde_json::Value>(&o.stdout) {
+                            if let Some(text) = p["candidates"][0]["content"]["parts"][0]["text"].as_str() {
+                                if !text.is_empty() {
+                                    let _ = std::fs::remove_file(tmp);
+                                    return text.to_string();
+                                }
+                            }
+                        }
+                    }
+                }
+                let _ = std::fs::remove_file(tmp);
+            }
+        }
+
+        // Fallback: Ollama (local, slower but works offline)
         let body = format!(r#"{{"model":"{}","messages":{},"stream":false}}"#, model, messages_json);
         let out = std::process::Command::new("curl")
-            .args(["-s", "-m", "30", "http://localhost:11434/api/chat",
+            .args(["-s", "-m", "15", "http://localhost:11434/api/chat",
                    "-H", "Content-Type: application/json", "-d", &body])
             .output();
         match out {

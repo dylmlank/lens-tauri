@@ -101,6 +101,7 @@ async function callLLM(onToken?: (t: string) => void, forceModels?: string[]): P
         const result = await invoke<string>("ollama_chat", {
           model,
           messagesJson: JSON.stringify(apiMsgs),
+          geminiKey: CONFIG.geminiKey || "",
         });
         if (result && !result.startsWith("Error:")) {
           onToken?.(result);
